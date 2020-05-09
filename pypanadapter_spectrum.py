@@ -171,12 +171,12 @@ class SpectrogramWidget(pg.PlotWidget):
     def on_avg_increase_clicked(self):
         if self.N_AVG<512:
             self.N_AVG *= 2
-        print self.N_AVG
+        print( self.N_AVG )
 
     def on_avg_decrease_clicked(self):
         if self.N_AVG>1:
             self.N_AVG /= 2
-        print self.N_AVG
+        print( self.N_AVG )
 
 
     def on_modechange_clicked(self):
@@ -193,12 +193,12 @@ class SpectrogramWidget(pg.PlotWidget):
         tmp_array = np.copy(self.img_array[self.img_array>0])
         tmp_array = tmp_array[tmp_array<250]
         tmp_array = tmp_array[:]
-        print tmp_array.shape
+        print( tmp_array.shape )
 
         self.minminlev = np.percentile(tmp_array, 99)
         self.minlev = np.percentile(tmp_array, 80)
         self.maxlev = np.percentile(tmp_array, 0.3)
-        print self.minlev, self.maxlev
+        print( self.minlev, self.maxlev )
         self.waterfall.setLevels([self.minlev, self.maxlev])
 
         self.plotwidget2.setYRange(-self.minminlev, -self.maxlev, padding=0.3)

@@ -162,7 +162,7 @@ class SpectrogramWidget(pg.PlotWidget):
     def on_autolevel_clicked(self):
         self.minlev = np.percentile(self.img_array, 95)-20
         self.maxlev = np.percentile(self.img_array, 5)-80
-        print self.minlev, self.maxlev
+        print( self.minlev, self.maxlev )
         self.waterfall.setLevels([self.minlev, self.maxlev])
 
 
