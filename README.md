@@ -1,5 +1,8 @@
 This is a fork to
 1. make the code python3 
+   a. sudo apt-get install librtlsdr-dev
+   b. pip3 install pyrtlsdr
+   c. pip3 install numpy
 2. Add more radio support (specifically the Xiegu X5105 at 70.455 MHz
 3. Add SoapySDR support especially SoapyRemote
 
