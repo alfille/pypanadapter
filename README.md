@@ -1,3 +1,8 @@
+This is a fork to
+1. make the code python3 
+2. Add more radio support (specifically the Xiegu X5105 at 70.455 MHz
+3. Add SoapySDR support especially SoapyRemote
+
 # PEPYSCOPE
 ##A simple and fast panadapter for your HF radio using an RTL-SDR USB dongle.
 
