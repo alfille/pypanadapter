@@ -6,7 +6,7 @@ from scipy.signal import welch, decimate
 import pyqtgraph as pg
 import pyaudio
 #from PyQt4 import QtCore, QtGui
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5 import QtCore, QtWidgets
 
 FS = 1.0e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
 F_SDR = 8.8315e6 # center frequency in Hz # THIS IS FOR OLD KENWOOD RADIOS LIKE THE TS-180S (WIDE BAND IF OUTPUT)
@@ -111,16 +111,16 @@ class SpectrogramWidget(pg.PlotWidget):
 
 
     def init_ui(self):
-        self.win = QtGui.QWidget()
+        self.win = QtWidgets.QWidget()
         self.win.setWindowTitle('PEPYSCOPE - IS0KYB')
         
-        vbox = QtGui.QVBoxLayout()
+        vbox = QtWidgets.QVBoxLayout()
         #self.setLayout(vbox)
 
         self.plotwidget1 = pg.PlotWidget()
         vbox.addWidget(self.plotwidget1)
 
-        hbox = QtGui.QHBoxLayout()
+        hbox = QtWidgets.QHBoxLayout()
 
         self.zoominbutton = QtWidgets.QPushButton("ZOOM IN")
         self.zoomoutbutton = QtWidgets.QPushButton("ZOOM OUT")
@@ -253,7 +253,7 @@ def update_mode():
 
 if __name__ == '__main__':
     old_mode = 0
-    app = QtGui.QApplication([])
+    app = QtWidgets.QApplication([])
     w = SpectrogramWidget()
     w.read_collected.connect(w.update)
 
