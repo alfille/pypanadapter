@@ -5,7 +5,8 @@ import numpy as np
 from scipy.signal import welch, decimate
 import pyqtgraph as pg
 import pyaudio
-from PyQt4 import QtCore, QtGui
+#from PyQt4 import QtCore, QtGui
+from PyQt5 import QtCore, QtGui
 
 FS = 1.0e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
 F_SDR = 8.8315e6 # center frequency in Hz # THIS IS FOR OLD KENWOOD RADIOS LIKE THE TS-180S (WIDE BAND IF OUTPUT)
@@ -102,7 +103,7 @@ class SpectrogramWidget(pg.PlotWidget):
     def init_image(self):
         self.img_array = 250*np.ones((self.N_WIN, self.N_WIN))
         # Plot the grid
-        for x in [0, self.N_WIN/2, self.N_WIN-1]:
+        for x in [0, int(self.N_WIN/2), int(self.N_WIN-1)]:
             if x==0 or x==self.N_WIN-1:
                 self.img_array[:,x] = 0
             else:
