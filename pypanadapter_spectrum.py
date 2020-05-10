@@ -306,7 +306,11 @@ if __name__ == '__main__':
     w = SpectrogramWidget()
     w.read_collected.connect(w.update)
 
-    rtl = RTLSDR(FS, F_SDR, w.read_collected)
+    try:
+        rtl = RTLSDR(FS, F_SDR, w.read_collected)
+    except:
+        print("Couldn't create the RTLSDR device\n")
+        raise
 
     t = QtCore.QTimer()
     t.timeout.connect(update_mode)
