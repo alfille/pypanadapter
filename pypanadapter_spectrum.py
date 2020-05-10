@@ -6,7 +6,7 @@ from scipy.signal import welch, decimate
 import pyqtgraph as pg
 #import pyaudio
 #from PyQt4 import QtCore, QtGui
-from PyQt5 import QtCore, QtGui
+from PyQt5 import QtCore, QtGui, QtWidgets
 
 FS = 2.4e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
 F_SDR = 8.8315e6 # center frequency in Hz # THIS IS FOR OLD KENWOOD RADIOS LIKE THE TS-180S (WIDE BAND IF OUTPUT)
@@ -135,13 +135,13 @@ class SpectrogramWidget(pg.PlotWidget):
 
         hbox = QtGui.QHBoxLayout()
 
-        self.zoominbutton = QtGui.QPushButton("ZOOM IN")
-        self.zoomoutbutton = QtGui.QPushButton("ZOOM OUT")
-        self.avg_increase_button = QtGui.QPushButton("AVG +")
-        self.avg_decrease_button = QtGui.QPushButton("AVG -")
-        self.modechange = QtGui.QPushButton("USB")
-        self.invertscroll = QtGui.QPushButton("Scroll")
-        self.autolevel = QtGui.QPushButton("Auto Levels")
+        self.zoominbutton = QtWidgets.QPushButton("ZOOM IN")
+        self.zoomoutbutton = QtWidgets.QPushButton("ZOOM OUT")
+        self.avg_increase_button = QtWidgets.QPushButton("AVG +")
+        self.avg_decrease_button = QtWidgets.QPushButton("AVG -")
+        self.modechange = QtWidgets.QPushButton("USB")
+        self.invertscroll = QtWidgets.QPushButton("Scroll")
+        self.autolevel = QtWidgets.QPushButton("Auto Levels")
 
         hbox.addWidget(self.zoominbutton)
         hbox.addWidget(self.zoomoutbutton)
@@ -310,7 +310,7 @@ if __name__ == '__main__':
         rtl = RTLSDR(FS, F_SDR, w.read_collected)
     except:
         print("Couldn't create the RTLSDR device\n")
-        raise
+#        raise
 
     t = QtCore.QTimer()
     t.timeout.connect(update_mode)
