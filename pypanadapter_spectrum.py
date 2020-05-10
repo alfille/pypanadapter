@@ -109,9 +109,9 @@ class SpectrogramWidget(pg.PlotWidget):
         self.win.show()
 
     def init_image(self):
-        self.img_array = 250*np.ones((self.N_WIN/4, self.N_WIN))
+        self.img_array = 250*np.ones((self.N_WIN//4, self.N_WIN))
         # Plot the grid
-        for x in [0, int(self.N_WIN/2), int(self.N_WIN-1)]:
+        for x in [0, self.N_WIN//2, self.N_WIN-1]:
             if x==0 or x==self.N_WIN-1:
                 #pass
                 self.img_array[:,x] = 0
@@ -244,7 +244,7 @@ class SpectrogramWidget(pg.PlotWidget):
             chunk = self.zoomfft(chunk, self.fft_ratio)
 
         sample_freq, spec = welch(chunk, FS, window="hamming", nperseg=self.N_FFT,  nfft=self.N_FFT)
-        spec = np.roll(spec, self.N_FFT/2, 0)[self.N_FFT/2-self.N_WIN/2:self.N_FFT/2+self.N_WIN/2]
+        spec = np.roll(spec, self.N_FFT//2, 0)[self.N_FFT//2-self.N_WIN//2:self.N_FFT//2+self.N_WIN//2]
         
         # get magnitude 
         psd = abs(spec)
@@ -252,7 +252,7 @@ class SpectrogramWidget(pg.PlotWidget):
         psd = -20 * np.log10(psd)
 
         # Plot the grid
-        for x in [0, self.N_WIN/2, self.N_WIN-1]:
+        for x in [0, self.N_WIN//2, self.N_WIN-1]:
             #pass
             psd[x] = 0            
 
@@ -283,7 +283,7 @@ class SpectrogramWidget(pg.PlotWidget):
         self.spectrum_plot.setData(np.arange(0,psd.shape[0]), -psd, pen="g")
 
         #self.plotwidget2.plot(x=[0,0], y=[-240,0], pen=pg.mkPen('r', width=1))
-        #self.plotwidget2.plot(x=[self.N_WIN/2, self.N_WIN/2], y=[-240,0], pen=pg.mkPen('r', width=1))
+        #self.plotwidget2.plot(x=[self.N_WIN/2, self.N_WIN//2], y=[-240,0], pen=pg.mkPen('r', width=1))
         #self.plotwidget2.plot(x=[self.N_WIN-1, self.N_WIN-1], y=[-240,0], pen=pg.mkPen('r', width=1))
 
 
