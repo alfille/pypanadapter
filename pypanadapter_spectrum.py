@@ -24,10 +24,20 @@ class X5105(Radio):
     name = "Xiegu X5105"
     # Intermediate Frquency
     IF = 70.455E6
-    
+
+class TS480(Radio):
+    name = "Kenwood TS4-480SAT"
+    # Intermediate Frquency
+    IF = 73.095E6
+
+RadioList = [TS180S,X5105,TS480]
+
 class SDR:
+    def __init(self):
+        self.driver = None
+        
     def Close(self):
-        pass
+        self.driver = None
     
 class RTLSDR(SDR):
     SampleRate = 2.56E6  # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
@@ -50,7 +60,9 @@ class RTLSDR(SDR):
         return np.flip(self.driver.read_samples(size))
         
     def Close(self):
-        self.driver.close()
+        if self.driver:
+            self.driver.close()
+        self.driver = None
 
 class RandSDR(SDR):
     SampleRate = 2.56E6  # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
@@ -65,19 +77,45 @@ class RandSDR(SDR):
         return 2*(np.random.random(size)+np.random.random(size)*1j)-(1.+1.j)
         
     def Close(self):
-        pass
+        self.driver = None
+        
+class appState:
+    Loop = True
+    def __init__( self, sdr=None, radio=None ):
+        self._sdr = sdr
+        self._radio = radio
+    
+    @property    
+    def radio( self ):
+        return self._radio
+        
+    @radio.setter
+    def radio( self, radio ):
+        self._radio = radio
+
+    @property    
+    def sdr( self ):
+        return self._sdr
+        
+    @sdr.setter
+    def sdr( self, sdr ):
+        self._sdr = sdr
+
+#global
+AppState = appState()
 
 class PanAdapter():
-    def __init__(self, sdr, radio = TS180S ):
+    def __init__(self ):
         self.mode = 0 # LSB or USB
+        global AppState
         
-        self.radio = radio # The radio
+        self.radio = AppState.radio # The radio
         
         # configure device
-        self.sdr = sdr # the SDR panadapter
+        self.sdr = AppState.sdr # the SDR panadapter
         self.sdr.SetFrequency( self.radio.IF )
 
-        self.widget = SpectrogramWidget(sdr)
+        self.widget = SpectrogramWidget(self.sdr)
                 
     def read(self):
         self.widget.read_collected.emit(self.sdr.Read(self.widget.N_AVG*self.widget.N_FFT))
@@ -97,8 +135,13 @@ class PanAdapter():
     
     def close(self):
         self.sdr.Close()
+        
+    def Loop(self, y_n ):
+        global AppState
+        AppState.Loop=y_n
+        self.qApp.quit()
 
-class SpectrogramWidget(pg.PlotWidget):
+class SpectrogramWidget(QtWidgets.QMainWindow):
 
     #define a custom signal
     read_collected = QtCore.pyqtSignal(np.ndarray)
@@ -110,26 +153,33 @@ class SpectrogramWidget(pg.PlotWidget):
 
         self.init_ui()
         self.qt_connections()
-        self.waterfall = pg.ImageItem()
-        self.plotwidget1.addItem(self.waterfall)
-        self.spectrum_plot = self.plotwidget2.plot()
-        self.plotwidget2.setYRange(-250, -100, padding=0.)
-        #self.plotwidget2.showGrid(x=True, y=True)
-
-        pg.setConfigOptions(antialias=False)
 
         self.N_FFT = 2048 # FFT bins
         self.N_WIN = 1024  # How many pixels to show from the FFT (around the center)
         self.N_AVG = N_AVG
         self.fft_ratio = 2.
 
+        self.makeWaterfall()
+        self.makeSpectrum()
+
+        pg.setConfigOptions(antialias=False)
+
         self.mode = 0 # USB=0, LSB=1: defaults to USB
         self.scroll = -1
         
-        self.minlev = 220
-        self.maxlev = 140
-
         self.init_image()
+        self.makeMenu()
+
+        self.read_collected.connect(self.update)
+
+        self.show()
+
+    def makeWaterfall( self ):
+        self.waterfall = pg.ImageItem()
+        self.plotwidget1.addItem(self.waterfall)
+
+        self.plotwidget1.hideAxis("left")
+        self.plotwidget1.hideAxis("bottom")
 
         # RED-GREEN Colormap
         pos = np.array([0., 0.5, 1.])
@@ -147,6 +197,9 @@ class SpectrogramWidget(pg.PlotWidget):
         pg.colormap
         lut = cmap.getLookupTable(0.0, 1.0, 256)
 
+        self.minlev = 220
+        self.maxlev = 140
+
         # set colormap
         self.waterfall.setLookupTable(lut)
         self.waterfall.setLevels([self.minlev, self.maxlev])
@@ -154,7 +207,7 @@ class SpectrogramWidget(pg.PlotWidget):
         # setup the correct scaling for x-axis
         self.bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)/1.e6/self.fft_ratio
         self.waterfall.scale(self.bw_hz,1)
-        self.setLabel('bottom', 'Frequency', units='kHz')
+#        self.setLabel('bottom', 'Frequency', units='kHz')
         
         self.text_leftlim = pg.TextItem("-%.1f kHz"%(self.bw_hz*self.N_WIN/2.))
         self.text_leftlim.setParentItem(self.waterfall)
@@ -165,20 +218,37 @@ class SpectrogramWidget(pg.PlotWidget):
         self.text_rightlim.setParentItem(self.waterfall)
         self.plotwidget1.addItem(self.text_rightlim)
         self.text_rightlim.setPos(self.bw_hz*(self.N_WIN-64), 0)
+        
+    def makeMenu( self ):
+        global RadioList
+        menu = self.menuBar()
 
-        self.plotwidget1.hideAxis("left")
-        self.plotwidget1.hideAxis("bottom")
+        filemenu = menu.addMenu('&File')
+
+        m = QtWidgets.QAction('&Restart',self)
+        m.triggered.connect(lambda state, y=True: self.Loop(y))
+        filemenu.addAction(m)
+
+        m = QtWidgets.QAction('&Quit',self)
+        m.triggered.connect(lambda state, y=False: self.Loop(y))
+        filemenu.addAction(m)
+
+        radiomenu = menu.addMenu('&Radio')
+
+        for r in RadioList:
+            print(r.name)
+            m = QtWidgets.QAction(r.name,self)
+#            m.setObjectName(r.name)
+            m.triggered.connect(lambda state,n=r.name: print(n))
+            radiomenu.addAction(m)
+        
+    def makeSpectrum( self ):
+        self.spectrum_plot = self.plotwidget2.plot()
+        self.plotwidget2.setYRange(-250, -100, padding=0.)
+        #self.plotwidget2.showGrid(x=True, y=True)
+
         self.plotwidget2.hideAxis("left")
         self.plotwidget2.hideAxis("bottom")
-
-        self.hideAxis("top")
-        self.hideAxis("bottom")
-        self.hideAxis("left")
-        self.hideAxis("right")
-        
-        self.read_collected.connect(self.update)
-
-        self.win.show()
 
     def init_image(self):
         self.img_array = 250*np.ones((self.N_WIN//4, self.N_WIN))
@@ -197,6 +267,7 @@ class SpectrogramWidget(pg.PlotWidget):
         self.win.setWindowTitle('PEPYSCOPE - IS0KYB')
         
         vbox = QtWidgets.QVBoxLayout()
+        vbox.addStretch()
         #self.setLayout(vbox)
 
         self.plotwidget1 = pg.PlotWidget()
@@ -225,12 +296,11 @@ class SpectrogramWidget(pg.PlotWidget):
         hbox.addWidget(self.avg_increase_button)
         hbox.addWidget(self.avg_decrease_button)
 
-        #vbox.addStretch()
         vbox.addLayout(hbox)
         self.win.setLayout(vbox)
 
-        self.win.setGeometry(10, 10, 1024, 512)
-        self.win.show()
+        self.setGeometry(10, 10, 1024, 512)
+        self.setCentralWidget(self.win)
 
     def qt_connections(self):
         self.zoominbutton.clicked.connect(self.on_zoominbutton_clicked)
@@ -276,8 +346,6 @@ class SpectrogramWidget(pg.PlotWidget):
 
         self.plotwidget2.setYRange(-self.minminlev, -self.maxlev, padding=0.3)
 
-
-
     def on_invertscroll_clicked(self):
         self.scroll *= -1
         self.init_image()
@@ -286,14 +354,12 @@ class SpectrogramWidget(pg.PlotWidget):
         if self.fft_ratio<512:
             self.fft_ratio *= 2
         #self.waterfall.scale(0.5,1)
-
     
     def on_zoomoutbutton_clicked(self):
         if self.fft_ratio>1:
             self.fft_ratio /= 2
         #self.waterfall.scale(2.0,1)
  
-
     def zoomfft(self, x, ratio = 1):
         f_demod = 1.
         t_total = (1/self.sdr.SampleRate) * self.N_FFT * self.N_AVG
@@ -306,7 +372,6 @@ class SpectrogramWidget(pg.PlotWidget):
             x_mix = decimate(x_mix, 2) # mix and decimate
 
         return x_mix 
-    
 
     def update(self, chunk):
         self.bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)
@@ -358,28 +423,29 @@ class SpectrogramWidget(pg.PlotWidget):
         #self.plotwidget2.plot(x=[self.N_WIN/2, self.N_WIN//2], y=[-240,0], pen=pg.mkPen('r', width=1))
         #self.plotwidget2.plot(x=[self.N_WIN-1, self.N_WIN-1], y=[-240,0], pen=pg.mkPen('r', width=1))
 
+    def Loop(self, y_n ):
+        global AppState
+        AppState.Loop=y_n
+        self.qApp.quit()
+
 if __name__ == '__main__':
-    app = QtWidgets.QApplication([])
 
     try:
-        sdr = RTLSDR()
+        AppState.sdr = RTLSDR()
     except:
         print("Couldn't open the SDR device -- use Random\n")
-        sdr = RandSDR()
+        AppState.sdr = RandSDR()
         
-    radio = TS180S()
-    print(radio.name)
-
-    try:
-        pan = PanAdapter(sdr, radio )
-    except:
-        print("Couldn't create the PanAdapter device\n")
-        raise
-
+    appState.radio = TS180S()
+    
     t = QtCore.QTimer()
-    t.timeout.connect(pan.update_mode)
-    t.timeout.connect(pan.read)
-    t.start(50) # max theoretical refresh rate 100 fps
 
-    app.exec_()
-    pan.close()
+    while appState.Loop:
+        app = QtWidgets.QApplication([])
+        pan = PanAdapter()
+        t.timeout.connect(pan.update_mode)
+        t.timeout.connect(pan.read)
+        t.start(50) # max theoretical refresh rate 100 fps
+        app.exec_()
+        t.stop()
+        pan.close()
