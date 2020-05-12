@@ -26,7 +26,7 @@ class X5105(Radio):
     IF = 70.455E6
 
 class TS480(Radio):
-    name = "Kenwood TS4-480SAT"
+    name = "Kenwood TS-480SAT"
     # Intermediate Frquency
     IF = 73.095E6
 
@@ -85,7 +85,17 @@ class appState:
         self._sdr = sdr
         self._radio = radio
         self._resetNeeded = False
-        self.Loop = True
+        self._Loop = True # for initial entry into loop
+
+    @property
+    def Loop(self):
+        l = self._Loop
+        self._Loop = False # Stay false after read
+        return l
+                
+    @Loop.setter
+    def Loop(self,value):
+        self._Loop = value
 
     @property
     def resetNeeded(self):
@@ -232,8 +242,15 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.plotwidget1.addItem(self.text_rightlim)
         self.text_rightlim.setPos(self.bw_hz*(self.N_WIN-64), 0)
         
+    def changeRadio( self, radio ):
+        global AppState
+        AppState.radio = radio
+        if AppState.resetNeeded:
+            self.Loop(True)
+
     def makeMenu( self ):
         global RadioList
+        global AppState
         menu = self.menuBar()
 
         filemenu = menu.addMenu('&File')
@@ -249,10 +266,11 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         radiomenu = menu.addMenu('&Radio')
 
         for r in RadioList:
-            print(r.name)
-            m = QtWidgets.QAction(r.name,self)
+            #print(f'IF={AppState.radio.IF} list={type(r)} Actual={type(AppState.radio)}')
+            y = AppState.radio == r
+            m = QtWidgets.QAction(r.name,self,checkable=y,checked=y)
 #            m.setObjectName(r.name)
-            m.triggered.connect(lambda state,n=r.name: print(n))
+            m.triggered.connect(lambda state,nr=r: self.changeRadio(nr))
             radiomenu.addAction(m)
         
     def makeSpectrum( self ):
@@ -449,7 +467,7 @@ if __name__ == '__main__':
         print("Couldn't open the SDR device -- use Random\n")
         AppState.sdr = RandSDR()
         
-    AppState.radio = TS180S()
+    AppState.radio = TS180S
     
     t = QtCore.QTimer()
 
@@ -463,4 +481,4 @@ if __name__ == '__main__':
         t.stop()
         app = None
     
-    pan.close()
+#    pan.close()
