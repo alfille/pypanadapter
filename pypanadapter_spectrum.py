@@ -1,6 +1,7 @@
 from rtlsdr import *
 from time import sleep
 import math
+import random
 import numpy as np
 from scipy.signal import welch, decimate
 import pyqtgraph as pg
@@ -32,60 +33,51 @@ class RTLSDR(SDR):
     SampleRate = 2.56E6  # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
     name = "RTL-SDR"
     def __init__(self):
-        self.sdr = RtlSdr()
-        self.sdr.sample_rate = self.SampleRate
+        self.driver = RtlSdr()
+        self.driver.sample_rate = self.SampleRate
         
     def SetFrequency(self, IF ):
         if IF < 30.E6 :
             #direct sampling needed (ADC Q vs 1=ADC I)
-            self.sdr.set_direct_sampling(2)
+            self.driver.set_direct_sampling(2)
         else:
-            self.sdr.set_direct_sampling(0)
+            self.driver.set_direct_sampling(0)
             
-        self.sdr.center_freq = IF
+        self.driver.center_freq = IF
         
     def Read(self,size):
         # IQ inversion to correct low-high frequencies
-        return np.flip(self.sdr.read_samples(size))
+        return np.flip(self.driver.read_samples(size))
         
     def Close(self):
-        self.sdr.close()
+        self.driver.close()
 
-class AppState:
-    # State of the application (choices)
-    def __init__(self, radio = TS180S(), sdr = RTLSDR() ):
-        self.radio = radio
-        self.sdr = sdr
+class RandSDR(SDR):
+    SampleRate = 2.56E6  # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+    name = "Random"
+    def __init__(self):
+        pass
         
-    @property
-    def radio(self):
-        return self.__radio
+    def SetFrequency(self, IF ):
+        pass
         
-    @radio.setter
-    def radio(self,r):
-        self.__radio = r
+    def Read(self,size):
+        return 2*(np.random.random(size)+np.random.random(size)*1j)-(1.+1.j)
         
-    @property
-    def sdr(self):
-        return self.__sdr
-        
-    @sdr.setter
-    def sdr(self,s):
-        self.__sdr = s
-        
+    def Close(self):
+        pass
+
 class PanAdapter():
-    def __init__(self, appstate = AppState() ):
+    def __init__(self, sdr, radio = TS180S ):
         self.mode = 0 # LSB or USB
         
-        self.appstate = appstate
-        
-        self.radio = self.appstate.radio # The radio
+        self.radio = radio # The radio
         
         # configure device
-        self.sdr = self.appstate.sdr # the SDR panadapter
+        self.sdr = sdr # the SDR panadapter
         self.sdr.SetFrequency( self.radio.IF )
 
-        self.widget = SpectrogramWidget(self.sdr)
+        self.widget = SpectrogramWidget(sdr)
                 
     def read(self):
         self.widget.read_collected.emit(self.sdr.Read(self.widget.N_AVG*self.widget.N_FFT))
@@ -106,8 +98,7 @@ class PanAdapter():
     def close(self):
         self.sdr.Close()
 
-#class SpectrogramWidget(pg.PlotWidget):
-class SpectrogramWidget(QtWidgets.QMainWindow):
+class SpectrogramWidget(pg.PlotWidget):
 
     #define a custom signal
     read_collected = QtCore.pyqtSignal(np.ndarray)
@@ -163,7 +154,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         # setup the correct scaling for x-axis
         self.bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)/1.e6/self.fft_ratio
         self.waterfall.scale(self.bw_hz,1)
-        self.plotwidget1.setLabel('bottom', 'Frequency', units='kHz')
+        self.setLabel('bottom', 'Frequency', units='kHz')
         
         self.text_leftlim = pg.TextItem("-%.1f kHz"%(self.bw_hz*self.N_WIN/2.))
         self.text_leftlim.setParentItem(self.waterfall)
@@ -180,14 +171,12 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.plotwidget2.hideAxis("left")
         self.plotwidget2.hideAxis("bottom")
 
-#        self.hideAxis("top")
-#        self.hideAxis("bottom")
-#        self.hideAxis("left")
-#        self.hideAxis("right")
+        self.hideAxis("top")
+        self.hideAxis("bottom")
+        self.hideAxis("left")
+        self.hideAxis("right")
         
         self.read_collected.connect(self.update)
-        
-        #self.makeMenu()
 
         self.win.show()
 
@@ -202,9 +191,6 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
                 #pass
                 self.img_array[:,x] = 0
 
-    def makeMenu(self):
-        menu = self.win.menuBar()
-        radiomenu = menu.addMenu('&Radio') 
 
     def init_ui(self):
         self.win = QtWidgets.QWidget()
@@ -375,11 +361,17 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 if __name__ == '__main__':
     app = QtWidgets.QApplication([])
 
-    state = AppState()
- 
+    try:
+        sdr = RTLSDR()
+    except:
+        print("Couldn't open the SDR device -- use Random\n")
+        sdr = RandSDR()
+        
+    radio = TS180S()
+    print(radio.name)
 
     try:
-        pan = PanAdapter( state )
+        pan = PanAdapter(sdr, radio )
     except:
         print("Couldn't create the PanAdapter device\n")
         raise
