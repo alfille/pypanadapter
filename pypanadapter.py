@@ -8,7 +8,7 @@ import pyqtgraph as pg
 #from PyQt4 import QtCore, QtGui
 from PyQt5 import QtCore, QtWidgets
 
-FS = 1.0e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+#FS = 1.0e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
 N_AVG = 32 # averaging over how many spectra
 
 class Radio:
@@ -19,27 +19,55 @@ class TS180S(Radio):
     # Intermediate Frquency
     IF = 8.8315E6
 
-class PanAdapter():
-    def __init__(self, FS, widget, radio = TS180S ):
-        self.mode = 0 # LSB or USB
-        self.widget = widget
-        self.radio = radio
-        self.signal = widget.read_collected
-        self.sdr = RtlSdr()
-        # configure device
-        self.sdr.set_direct_sampling(2)
-        self.sdr.sample_rate = FS
-        self.sdr.center_freq = self.radio.IF
-
-    def read(self):
-        samples = self.sdr.read_samples(N_AVG*w.N_FFT)
-        self.signal.emit(np.flip(samples)) # IQ inversion to correct low-high frequencies
-
-    def close(self):
-        self.sdr.close()
+class X5105(Radio):
+    name = "Xiegu X5105"
+    # Intermediate Frquency
+    IF = 70.455E6
     
+class SDR:
+    def Close(self):
+        pass
+    
+class RTLSDR(SDR):
+    SampleRate = 2.56E6  # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+    name = "RTL-SDR"
+    def __init__(self):
+        self.sdr = RtlSdr()
+        self.sdr.sample_rate = self.SampleRate
+        
+    def SetFrequency(self, IF ):
+        if IF < 30.E6 :
+            #direct sampling needed (ADC Q vs 1=ADC I)
+            self.sdr.set_direct_sampling(2)
+        else:
+            self.sdr.set_direct_sampling(0)
+            
+        self.sdr.center_freq = IF
+        
+    def Read(self,size):
+        # IQ inversion to correct low-high frequencies
+        return np.flip(self.sdr.read_samples(size))
+        
+    def Close(self):
+        self.sdr.close()
+
+class PanAdapter():
+    def __init__(self, sdr, radio = TS180S ):
+        self.mode = 0 # LSB or USB
+        
+        self.radio = radio # The radio
+        
+        # configure device
+        self.sdr = sdr # the SDR panadapter
+        self.sdr.SetFrequency( self.radio.IF )
+
+        self.widget = SpectrogramWidget(sdr)
+                
+    def read(self):
+        self.widget.read_collected.emit(self.sdr.Read(self.widget.N_AVG*self.widget.N_FFT))
+
     def changef(self, F_SDR):
-        self.sdr.center_freq = F_SDR
+        self.sdr.SetFrequency( F_SDR )
 
     def update_mode(self):
         if self.widget.mode!=self.mode:
@@ -50,16 +78,22 @@ class PanAdapter():
             self.changef(self.radio.IF-sign*3000)
             self.mode = self.widget.mode
 
+    def close(self):
+        self.sdr.Close()
 
 class SpectrogramWidget(pg.PlotWidget):
+
+    #define a custom signal
     read_collected = QtCore.pyqtSignal(np.ndarray)
-    def __init__(self):
+
+    def __init__(self,sdr):
         super(SpectrogramWidget, self).__init__()
+
+        self.sdr = sdr
 
         self.init_ui()
         self.qt_connections()
         self.waterfall = pg.ImageItem()
-        self.spectrum = pg.PlotItem()
         self.plotwidget1.addItem(self.waterfall)
     
         self.N_FFT = 2048 # FFT bins
@@ -116,6 +150,8 @@ class SpectrogramWidget(pg.PlotWidget):
         self.hideAxis("bottom")
         self.hideAxis("left")
         self.hideAxis("right")
+        
+        self.read_collected.connect(self.update)
 
         self.win.show()
 
@@ -204,8 +240,8 @@ class SpectrogramWidget(pg.PlotWidget):
 
     def zoomfft(self, x, ratio = 1):
         f_demod = 1.
-        t_total = (1/FS) * self.N_FFT * N_AVG
-        t = np.arange(0, t_total, 1 / FS)
+        t_total = (1/self.sdr.SampleRate) * self.N_FFT * self.N_AVG
+        t = np.arange(0, t_total, 1 / self.sdr.SampleRate)
         lo = 2**.5 * np.exp(-2j*np.pi*f_demod * t) # local oscillator
         x_mix = x*lo
         
@@ -257,13 +293,13 @@ class SpectrogramWidget(pg.PlotWidget):
         self.text_rightlim.setText(text="+%.1f kHz"%(self.bw_hz/2000./self.fft_ratio))
 
 if __name__ == '__main__':
-    old_mode = 0
     app = QtWidgets.QApplication([])
-    w = SpectrogramWidget()
-    w.read_collected.connect(w.update)
+
+    radio = TS180S()
+    print(radio.name)
 
     try:
-        rtl = PanAdapter(FS, w, TS180S )
+        pan = PanAdapter(sdr, radio )
     except:
         print("Couldn't create the PanAdapter device\n")
         raise
@@ -274,4 +310,4 @@ if __name__ == '__main__':
     t.start(10) # max theoretical refresh rate 100 fps
 
     app.exec_()
-    rtl.close()
+    pan.close()
