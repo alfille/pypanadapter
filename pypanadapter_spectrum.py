@@ -81,9 +81,9 @@ class RandSDR(SDR):
         self.driver = None
         
 class appState:
-    def __init__( self, sdr=None, radio=None ):
-        self._sdr = sdr
-        self._radio = radio
+    def __init__( self, sdr_class=None, radio_class=None ):
+        self._sdr_class = sdr_class
+        self._radio_class = radio_class
         self._resetNeeded = False
         self._Loop = True # for initial entry into loop
 
@@ -104,24 +104,24 @@ class appState:
         return rn
     
     @property    
-    def radio( self ):
-        return self._radio
+    def radio_class( self ):
+        return self._radio_class
         
-    @radio.setter
-    def radio( self, radio ):
-        if radio != self._radio:
+    @radio_class.setter
+    def radio_class( self, radio_class ):
+        if radio_class != self._radio_class:
             self._resetNeeded = True
-        self._radio = radio
+        self._radio_class = radio_class
 
     @property    
-    def sdr( self ):
-        return self._sdr
+    def sdr_class( self ):
+        return self._sdr_class
         
-    @sdr.setter
-    def sdr( self, sdr ):
-        if sdr != self._sdr:
+    @sdr_class.setter
+    def sdr_class( self, sdr_class ):
+        if sdr_class != self._sdr_class:
             self._resetNeeded = True
-        self._sdr = sdr
+        self._sdr_class = sdr_class
 
 #global
 AppState = appState()
@@ -131,13 +131,15 @@ class PanAdapter():
         self.mode = 0 # LSB or USB
         global AppState
         
-        self.radio = AppState.radio # The radio
+        self.radio_class = AppState.radio_class # The radio
         
         # configure device
-        self.sdr = AppState.sdr # the SDR panadapter
-        print(f'Starting PAN radio {self.radio.name} sdr {self.sdr.name}\n',)
-        self.sdr.SetFrequency( self.radio.IF )
-        self.widget = SpectrogramWidget()
+        self.sdr_class = AppState.sdr_class # the SDR panadapter
+        print(f'Starting PAN radio {self.radio_class} sdr {self.sdr_class}\n',)
+        print(f'Starting PAN radio {self.radio_class.name} sdr {self.sdr_class.name}\n',)
+        self.sdr = self.sdr_class()
+        self.changef( self.radio_class.IF )
+        self.widget = SpectrogramWidget(self.sdr)
                 
     def read(self):
         self.widget.read_collected.emit(self.sdr.Read(self.widget.N_AVG*self.widget.N_FFT))
@@ -168,11 +170,11 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
     #define a custom signal
     read_collected = QtCore.pyqtSignal(np.ndarray)
 
-    def __init__(self):
+    def __init__(self,sdr):
         super(SpectrogramWidget, self).__init__()
         
         global AppState
-        self.sdr = AppState.sdr
+        self.sdr = sdr
 
         self.init_ui()
         self.qt_connections()
@@ -242,9 +244,9 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.plotwidget1.addItem(self.text_rightlim)
         self.text_rightlim.setPos(self.bw_hz*(self.N_WIN-64), 0)
         
-    def changeRadio( self, radio ):
+    def changeRadio( self, radio_class ):
         global AppState
-        AppState.radio = radio
+        AppState.radio_class = radio_class
         if AppState.resetNeeded:
             self.Loop(True)
 
@@ -267,7 +269,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         for r in RadioList:
             #print(f'IF={AppState.radio.IF} list={type(r)} Actual={type(AppState.radio)}')
-            y = AppState.radio == r
+            y = AppState.radio_class == r
             m = QtWidgets.QAction(r.name,self,checkable=y,checked=y)
 #            m.setObjectName(r.name)
             m.triggered.connect(lambda state,nr=r: self.changeRadio(nr))
@@ -462,12 +464,12 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 if __name__ == '__main__':
 
     try:
-        AppState.sdr = RTLSDR()
+        AppState.sdr_class = RTLSDR
     except:
         print("Couldn't open the SDR device -- use Random\n")
-        AppState.sdr = RandSDR()
+        AppState.sdr_class = RandSDR
         
-    AppState.radio = TS180S
+    AppState.radio_class = TS180S
     
     t = QtCore.QTimer()
 
