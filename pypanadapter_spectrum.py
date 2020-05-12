@@ -13,7 +13,7 @@ from PyQt5 import QtCore, QtWidgets
 N_AVG = 128 # averaging over how many spectra
 
 class Radio:
-        pass
+    name = "None"
 
 class TS180S(Radio):
     name = "Kenwood TS-180S"
@@ -33,6 +33,7 @@ class TS480(Radio):
 RadioList = [TS180S,X5105,TS480]
 
 class SDR:
+    name = "None"
     def __init(self):
         self.driver = None
         
@@ -80,10 +81,17 @@ class RandSDR(SDR):
         self.driver = None
         
 class appState:
-    Loop = True
     def __init__( self, sdr=None, radio=None ):
         self._sdr = sdr
         self._radio = radio
+        self._resetNeeded = False
+        self.Loop = True
+
+    @property
+    def resetNeeded(self):
+        rn = self._resetNeeded
+        self._resetNeeded = False
+        return rn
     
     @property    
     def radio( self ):
@@ -91,6 +99,8 @@ class appState:
         
     @radio.setter
     def radio( self, radio ):
+        if radio != self._radio:
+            self._resetNeeded = True
         self._radio = radio
 
     @property    
@@ -99,6 +109,8 @@ class appState:
         
     @sdr.setter
     def sdr( self, sdr ):
+        if sdr != self._sdr:
+            self._resetNeeded = True
         self._sdr = sdr
 
 #global
@@ -113,9 +125,9 @@ class PanAdapter():
         
         # configure device
         self.sdr = AppState.sdr # the SDR panadapter
+        print(f'Starting PAN radio {self.radio.name} sdr {self.sdr.name}\n',)
         self.sdr.SetFrequency( self.radio.IF )
-
-        self.widget = SpectrogramWidget(self.sdr)
+        self.widget = SpectrogramWidget()
                 
     def read(self):
         self.widget.read_collected.emit(self.sdr.Read(self.widget.N_AVG*self.widget.N_FFT))
@@ -146,10 +158,11 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
     #define a custom signal
     read_collected = QtCore.pyqtSignal(np.ndarray)
 
-    def __init__(self,sdr):
+    def __init__(self):
         super(SpectrogramWidget, self).__init__()
-
-        self.sdr = sdr
+        
+        global AppState
+        self.sdr = AppState.sdr
 
         self.init_ui()
         self.qt_connections()
@@ -426,7 +439,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
     def Loop(self, y_n ):
         global AppState
         AppState.Loop=y_n
-        self.qApp.quit()
+        QtWidgets.qApp.quit()
 
 if __name__ == '__main__':
 
@@ -436,11 +449,11 @@ if __name__ == '__main__':
         print("Couldn't open the SDR device -- use Random\n")
         AppState.sdr = RandSDR()
         
-    appState.radio = TS180S()
+    AppState.radio = TS180S()
     
     t = QtCore.QTimer()
 
-    while appState.Loop:
+    while AppState.Loop:
         app = QtWidgets.QApplication([])
         pan = PanAdapter()
         t.timeout.connect(pan.update_mode)
@@ -448,4 +461,6 @@ if __name__ == '__main__':
         t.start(50) # max theoretical refresh rate 100 fps
         app.exec_()
         t.stop()
-        pan.close()
+        app = None
+    
+    pan.close()
