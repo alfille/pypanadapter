@@ -12,7 +12,7 @@ FS = 1.0e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, 
 F_SDR = 8.8315e6 # center frequency in Hz # THIS IS FOR OLD KENWOOD RADIOS LIKE THE TS-180S (WIDE BAND IF OUTPUT)
 N_AVG = 32 # averaging over how many spectra
 
-class RTLSDR():
+class PanAdapter():
     def __init__(self, FS, F_SDR, signal):
         self.signal = signal
         self.sdr = RtlSdr()
@@ -258,9 +258,9 @@ if __name__ == '__main__':
     w.read_collected.connect(w.update)
 
     try:
-        rtl = RTLSDR(FS, F_SDR, w.read_collected)
+        rtl = PanAdapter(FS, F_SDR, w.read_collected)
     except:
-        print("Couldn't create the RTLSDR device\n")
+        print("Couldn't create the PanAdapter device\n")
         raise
 
     t = QtCore.QTimer()
