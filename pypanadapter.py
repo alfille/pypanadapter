@@ -220,7 +220,7 @@ class SpectrogramWidget(pg.PlotWidget):
         self.img_array[-1:] = psd
         self.img_array = np.roll(self.img_array, -1*self.scroll, 0)
 
-        for i, x in enumerate(range(0, self.N_WIN-1, ((self.N_WIN)/10))):
+        for i, x in enumerate(range(0, self.N_WIN-1, (self.N_WIN)//10)):
             if i!=5 and i!=10:
                 if self.scroll>0:
                     for y in range(5,15):
