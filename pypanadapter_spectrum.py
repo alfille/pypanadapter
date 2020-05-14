@@ -9,18 +9,27 @@ import pyqtgraph as pg
 from PyQt5 import QtCore, QtWidgets
 
 FS = 2.4e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
-F_SDR = 8.8315e6 # center frequency in Hz # THIS IS FOR OLD KENWOOD RADIOS LIKE THE TS-180S (WIDE BAND IF OUTPUT)
-#F_SDR = 45.0515e6 # center frequency in Hz # THIS IS FOR OLD KENWOOD RADIOS LIKE THE TS-180S (WIDE BAND IF OUTPUT)
 N_AVG = 128 # averaging over how many spectra
 
+class Radio:
+        pass
+
+class TS180S(Radio):
+    name = "Kenwood TS-180S"
+    # Intermediate Frquency
+    IF = 8.8315E6
+
 class PanAdapter():
-    def __init__(self, FS, F_SDR, signal):
-        self.signal = signal
+    def __init__(self, FS, widget, radio = TS180S ):
+        self.mode = 0 # LSB or USB
+        self.widget = widget
+        self.radio = radio
+        self.signal = widget.read_collected
         self.sdr = RtlSdr()
         # configure device
         self.sdr.set_direct_sampling(2)
         self.sdr.sample_rate = FS
-        self.sdr.center_freq = F_SDR
+        self.sdr.center_freq = self.radio.IF
 
     def read(self):
         samples = self.sdr.read_samples(w.N_AVG*w.N_FFT)
@@ -31,6 +40,16 @@ class PanAdapter():
     
     def changef(self, F_SDR):
         self.sdr.center_freq = F_SDR
+
+
+    def update_mode(self):
+        if self.widget.mode!=self.mode:
+            sign = (self.widget.mode-self.mode)
+            sign /= math.fabs(sign)
+            if sign<0:
+                sign = 0
+            self.changef(self.radio.IF-sign*3000)
+            self.mode = self.widget.mode
 
 
 class SpectrogramWidget(pg.PlotWidget):
@@ -286,34 +305,19 @@ class SpectrogramWidget(pg.PlotWidget):
         #self.plotwidget2.plot(x=[self.N_WIN/2, self.N_WIN//2], y=[-240,0], pen=pg.mkPen('r', width=1))
         #self.plotwidget2.plot(x=[self.N_WIN-1, self.N_WIN-1], y=[-240,0], pen=pg.mkPen('r', width=1))
 
-
-
-def update_mode():
-    global old_mode
-    global rtl
-    if w.mode!=old_mode:
-        sign = (w.mode-old_mode)
-        sign /= math.fabs(sign)
-        if sign<0:
-            sign = 0
-        rtl.changef(F_SDR-sign*3000)
-        old_mode = w.mode
-        return rtl
-
 if __name__ == '__main__':
-    old_mode = 0
     app = QtWidgets.QApplication([])
     w = SpectrogramWidget()
     w.read_collected.connect(w.update)
 
     try:
-        rtl = PanAdapter(FS, F_SDR, w.read_collected)
+        rtl = PanAdapter(FS, w, TS180S )
     except:
         print("Couldn't create the PanAdapter device\n")
         raise
 
     t = QtCore.QTimer()
-    t.timeout.connect(update_mode)
+    t.timeout.connect(rtl.update_mode)
     t.timeout.connect(rtl.read)
     t.start(50) # max theoretical refresh rate 100 fps
 
