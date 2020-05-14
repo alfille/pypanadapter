@@ -8,7 +8,7 @@ import pyqtgraph as pg
 #from PyQt4 import QtCore, QtGui
 from PyQt5 import QtCore, QtWidgets
 
-FS = 2.4e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+#FS = 2.4e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
 N_AVG = 128 # averaging over how many spectra
 
 class Radio:
@@ -18,28 +18,53 @@ class TS180S(Radio):
     name = "Kenwood TS-180S"
     # Intermediate Frquency
     IF = 8.8315E6
+    
+class SDR:
+    def Close(self):
+        pass
+    
+class RTLSDR(SDR):
+    SampleRate = 2.56E6  # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+    name = "RTL-SDR"
+    def __init__(self):
+        self.sdr = RtlSdr()
+        self.sdr.sample_rate = self.SampleRate
+        
+    def SetFrequency(self, IF ):
+        if IF < 30.E6 :
+            #direct sampling needed (ADC Q vs 1=ADC I)
+            self.sdr.set_direct_sampling(2)
+        else:
+            self.sdr.set_direct_sampling(0)
+            
+        self.sdr.center_freq = IF
+        
+    def Read(self,size):
+        # IQ inversion to correct low-high frequencies
+        return np.flip(self.sdr.read_samples(size))
+        
+    def Close(self):
+        self.sdr.close()
 
 class PanAdapter():
-    def __init__(self, FS, widget, radio = TS180S ):
+    def __init__(self, sdr, radio = TS180S ):
         self.mode = 0 # LSB or USB
-        self.widget = widget
-        self.radio = radio
-        self.signal = widget.read_collected
-        self.sdr = RtlSdr()
+        
+        self.radio = radio # The radio
+        
         # configure device
-        self.sdr.set_direct_sampling(2)
-        self.sdr.sample_rate = FS
-        self.sdr.center_freq = self.radio.IF
+        self.sdr = sdr # the SDR panadapter
+        self.sdr.SetFrequency( self.radio.IF )
 
+        self.widget = SpectrogramWidget(sdr)
+        self.signal = self.widget.read_collected
+        #w.read_collected.connect(w.update)
+                
     def read(self):
-        samples = self.sdr.read_samples(w.N_AVG*w.N_FFT)
-        self.signal.emit(np.flip(samples)) # IQ inversion to correct low-high frequencies
+        self.signal.emit(self.sdr.Read(self.widget.N_AVG*self.widget.N_FFT))
 
-    def close(self):
-        self.sdr.close()
-    
     def changef(self, F_SDR):
-        self.sdr.center_freq = F_SDR
+        self.sdr.SetFrequency( F_SDR )
 
 
     def update_mode(self):
@@ -50,12 +75,16 @@ class PanAdapter():
                 sign = 0
             self.changef(self.radio.IF-sign*3000)
             self.mode = self.widget.mode
-
+    
+    def close(self):
+        self.sdr.Close()
 
 class SpectrogramWidget(pg.PlotWidget):
     read_collected = QtCore.pyqtSignal(np.ndarray)
-    def __init__(self):
+    def __init__(self,sdr):
         super(SpectrogramWidget, self).__init__()
+
+        self.sdr = sdr
 
         self.init_ui()
         self.qt_connections()
@@ -101,7 +130,7 @@ class SpectrogramWidget(pg.PlotWidget):
         self.waterfall.setLevels([self.minlev, self.maxlev])
 
         # setup the correct scaling for x-axis
-        self.bw_hz = FS/float(self.N_FFT) * float(self.N_WIN)/1.e6/self.fft_ratio
+        self.bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)/1.e6/self.fft_ratio
         self.waterfall.scale(self.bw_hz,1)
         self.setLabel('bottom', 'Frequency', units='kHz')
         
@@ -124,6 +153,8 @@ class SpectrogramWidget(pg.PlotWidget):
         self.hideAxis("bottom")
         self.hideAxis("left")
         self.hideAxis("right")
+        
+        self.read_collected.connect(self.update)
 
         self.win.show()
 
@@ -243,8 +274,8 @@ class SpectrogramWidget(pg.PlotWidget):
 
     def zoomfft(self, x, ratio = 1):
         f_demod = 1.
-        t_total = (1/FS) * self.N_FFT * self.N_AVG
-        t = np.arange(0, t_total, 1 / FS)
+        t_total = (1/self.sdr.SampleRate) * self.N_FFT * self.N_AVG
+        t = np.arange(0, t_total, 1 / self.sdr.SampleRate)
         lo = 2**.5 * np.exp(-2j*np.pi*f_demod * t) # local oscillator
         x_mix = x*lo
         
@@ -256,13 +287,13 @@ class SpectrogramWidget(pg.PlotWidget):
     
 
     def update(self, chunk):
-        self.bw_hz = FS/float(self.N_FFT) * float(self.N_WIN)
+        self.bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)
         self.win.setWindowTitle('PEPYSCOPE - IS0KYB - N_FFT: %d, BW: %.1f kHz' % (self.N_FFT, self.bw_hz/1000./self.fft_ratio))
 
         if self.fft_ratio>1:
             chunk = self.zoomfft(chunk, self.fft_ratio)
 
-        sample_freq, spec = welch(chunk, FS, window="hamming", nperseg=self.N_FFT,  nfft=self.N_FFT)
+        sample_freq, spec = welch(chunk, self.sdr.SampleRate, window="hamming", nperseg=self.N_FFT,  nfft=self.N_FFT)
         spec = np.roll(spec, self.N_FFT//2, 0)[self.N_FFT//2-self.N_WIN//2:self.N_FFT//2+self.N_WIN//2]
         
         # get magnitude 
@@ -307,19 +338,25 @@ class SpectrogramWidget(pg.PlotWidget):
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication([])
-    w = SpectrogramWidget()
-    w.read_collected.connect(w.update)
 
     try:
-        rtl = PanAdapter(FS, w, TS180S )
+        sdr = RTLSDR()
+    except:
+        print("Couldn't open the SDR device\n")
+        raise
+        
+    radio = TS180S()
+
+    try:
+        pan = PanAdapter(sdr, radio )
     except:
         print("Couldn't create the PanAdapter device\n")
         raise
 
     t = QtCore.QTimer()
-    t.timeout.connect(rtl.update_mode)
-    t.timeout.connect(rtl.read)
+    t.timeout.connect(pan.update_mode)
+    t.timeout.connect(pan.read)
     t.start(50) # max theoretical refresh rate 100 fps
 
     app.exec_()
-    rtl.close()
+    pan.close()
