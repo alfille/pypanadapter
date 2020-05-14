@@ -19,6 +19,11 @@ class TS180S(Radio):
     # Intermediate Frquency
     IF = 8.8315E6
     
+class X5105(Radio):
+    name = "Xiegu X5105"
+    # Intermediate Frquency
+    IF = 70.455E6
+    
 class SDR:
     def Close(self):
         pass
@@ -57,11 +62,9 @@ class PanAdapter():
         self.sdr.SetFrequency( self.radio.IF )
 
         self.widget = SpectrogramWidget(sdr)
-        self.signal = self.widget.read_collected
-        #w.read_collected.connect(w.update)
                 
     def read(self):
-        self.signal.emit(self.sdr.Read(self.widget.N_AVG*self.widget.N_FFT))
+        self.widget.read_collected.emit(self.sdr.Read(self.widget.N_AVG*self.widget.N_FFT))
 
     def changef(self, F_SDR):
         self.sdr.SetFrequency( F_SDR )
@@ -80,7 +83,10 @@ class PanAdapter():
         self.sdr.Close()
 
 class SpectrogramWidget(pg.PlotWidget):
+
+    #define a custom signal
     read_collected = QtCore.pyqtSignal(np.ndarray)
+
     def __init__(self,sdr):
         super(SpectrogramWidget, self).__init__()
 
@@ -346,6 +352,7 @@ if __name__ == '__main__':
         raise
         
     radio = TS180S()
+    print(radio.name)
 
     try:
         pan = PanAdapter(sdr, radio )
