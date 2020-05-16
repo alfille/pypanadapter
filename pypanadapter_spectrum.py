@@ -51,17 +51,41 @@ class RTLSDR(SDR):
     def Close(self):
         self.sdr.close()
 
+class AppState:
+    # State of the application (choices)
+    def __init__(self, radio = TS180S(), sdr = RTLSDR() ):
+        self.radio = radio
+        self.sdr = sdr
+        
+    @property
+    def radio(self):
+        return self.__radio
+        
+    @radio.setter
+    def radio(self,r):
+        self.__radio = r
+        
+    @property
+    def sdr(self):
+        return self.__sdr
+        
+    @sdr.setter
+    def sdr(self,s):
+        self.__sdr = s
+        
 class PanAdapter():
-    def __init__(self, sdr, radio = TS180S ):
+    def __init__(self, appstate = AppState() ):
         self.mode = 0 # LSB or USB
         
-        self.radio = radio # The radio
+        self.appstate = appstate
+        
+        self.radio = self.appstate.radio # The radio
         
         # configure device
-        self.sdr = sdr # the SDR panadapter
+        self.sdr = self.appstate.sdr # the SDR panadapter
         self.sdr.SetFrequency( self.radio.IF )
 
-        self.widget = SpectrogramWidget(sdr)
+        self.widget = SpectrogramWidget(self.sdr)
                 
     def read(self):
         self.widget.read_collected.emit(self.sdr.Read(self.widget.N_AVG*self.widget.N_FFT))
@@ -82,7 +106,8 @@ class PanAdapter():
     def close(self):
         self.sdr.Close()
 
-class SpectrogramWidget(pg.PlotWidget):
+#class SpectrogramWidget(pg.PlotWidget):
+class SpectrogramWidget(QtWidgets.QMainWindow):
 
     #define a custom signal
     read_collected = QtCore.pyqtSignal(np.ndarray)
@@ -138,7 +163,7 @@ class SpectrogramWidget(pg.PlotWidget):
         # setup the correct scaling for x-axis
         self.bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)/1.e6/self.fft_ratio
         self.waterfall.scale(self.bw_hz,1)
-        self.setLabel('bottom', 'Frequency', units='kHz')
+        self.plotwidget1.setLabel('bottom', 'Frequency', units='kHz')
         
         self.text_leftlim = pg.TextItem("-%.1f kHz"%(self.bw_hz*self.N_WIN/2.))
         self.text_leftlim.setParentItem(self.waterfall)
@@ -155,12 +180,14 @@ class SpectrogramWidget(pg.PlotWidget):
         self.plotwidget2.hideAxis("left")
         self.plotwidget2.hideAxis("bottom")
 
-        self.hideAxis("top")
-        self.hideAxis("bottom")
-        self.hideAxis("left")
-        self.hideAxis("right")
+#        self.hideAxis("top")
+#        self.hideAxis("bottom")
+#        self.hideAxis("left")
+#        self.hideAxis("right")
         
         self.read_collected.connect(self.update)
+        
+        #self.makeMenu()
 
         self.win.show()
 
@@ -175,6 +202,9 @@ class SpectrogramWidget(pg.PlotWidget):
                 #pass
                 self.img_array[:,x] = 0
 
+    def makeMenu(self):
+        menu = self.win.menuBar()
+        radiomenu = menu.addMenu('&Radio') 
 
     def init_ui(self):
         self.win = QtWidgets.QWidget()
@@ -345,17 +375,11 @@ class SpectrogramWidget(pg.PlotWidget):
 if __name__ == '__main__':
     app = QtWidgets.QApplication([])
 
-    try:
-        sdr = RTLSDR()
-    except:
-        print("Couldn't open the SDR device\n")
-        raise
-        
-    radio = TS180S()
-    print(radio.name)
+    state = AppState()
+ 
 
     try:
-        pan = PanAdapter(sdr, radio )
+        pan = PanAdapter( state )
     except:
         print("Couldn't create the PanAdapter device\n")
         raise
