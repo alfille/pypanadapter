@@ -107,6 +107,7 @@ class SpectrogramWidget(pg.PlotWidget):
         self.maxlev = 140
 
         self.init_image()
+        self.N_AVG = N_AVG
 
         # RED-GREEN Colormap
         pos = np.array([0., 0.5, 1.])
@@ -129,7 +130,7 @@ class SpectrogramWidget(pg.PlotWidget):
         self.waterfall.setLevels([self.minlev, self.maxlev])
 
         # setup the correct scaling for x-axis
-        self.bw_hz = FS/float(self.N_FFT) * float(self.N_WIN)/1.e6/self.fft_ratio
+        self.bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)/1.e6/self.fft_ratio
         self.waterfall.scale(self.bw_hz,1)
         self.setLabel('bottom', 'Frequency', units='kHz')
         
@@ -253,13 +254,13 @@ class SpectrogramWidget(pg.PlotWidget):
     
 
     def update(self, chunk):
-        self.bw_hz = FS/float(self.N_FFT) * float(self.N_WIN)
+        self.bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)
         self.win.setWindowTitle('PEPYSCOPE - IS0KYB - N_FFT: %d, BW: %.1f kHz' % (self.N_FFT, self.bw_hz/1000./self.fft_ratio))
 
         if self.fft_ratio>1:
             chunk = self.zoomfft(chunk, self.fft_ratio)
 
-        sample_freq, spec = welch(chunk, FS, window="hamming", nperseg=self.N_FFT,  nfft=self.N_FFT)
+        sample_freq, spec = welch(chunk, self.sdr.SampleRate, window="hamming", nperseg=self.N_FFT,  nfft=self.N_FFT)
         spec = np.roll(spec, self.N_FFT//2, 0)[self.N_FFT//2-self.N_WIN//2:self.N_FFT//2+self.N_WIN//2]
         
         # get magnitude 
@@ -295,6 +296,12 @@ class SpectrogramWidget(pg.PlotWidget):
 if __name__ == '__main__':
     app = QtWidgets.QApplication([])
 
+    try:
+        sdr = RTLSDR()
+    except:
+        print("Couldn't open the SDR device\n")
+        raise
+        
     radio = TS180S()
     print(radio.name)
 
@@ -305,8 +312,8 @@ if __name__ == '__main__':
         raise
 
     t = QtCore.QTimer()
-    t.timeout.connect(rtl.update_mode)
-    t.timeout.connect(rtl.read)
+    t.timeout.connect(pan.update_mode)
+    t.timeout.connect(pan.read)
     t.start(10) # max theoretical refresh rate 100 fps
 
     app.exec_()
