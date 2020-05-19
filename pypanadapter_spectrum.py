@@ -103,7 +103,7 @@ class appState:
         self._resetNeeded = False
         return rn
     
-    @property    
+    @property
     def radio_class( self ):
         return self._radio_class
         
@@ -135,9 +135,18 @@ class PanAdapter():
         
         # configure device
         self.sdr_class = AppState.sdr_class # the SDR panadapter
-        print(f'Starting PAN radio {self.radio_class} sdr {self.sdr_class}\n',)
         print(f'Starting PAN radio {self.radio_class.name} sdr {self.sdr_class.name}\n',)
-        self.sdr = self.sdr_class()
+        
+        # open sdr (or at least try
+        try:
+            self.sdr = self.sdr_class()
+        except:
+            print("Could not open sdr {self.sdr_class} -- switch to random\n")
+            AppState.sdr_class = RandSDR
+            self.sdr_class = AppState.sdr_class
+            print(f'Starting PAN radio {self.radio_class.name} sdr {self.sdr_class.name}\n',)
+            self.sdr = self.sdr_class()
+            
         self.changef( self.radio_class.IF )
         self.widget = SpectrogramWidget(self.sdr)
                 
@@ -301,13 +310,16 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         
         vbox = QtWidgets.QVBoxLayout()
         vbox.addStretch()
-        #self.setLayout(vbox)
+        
+        self.split = QtWidgets.QSplitter()
+        self.split.setOrientation(QtCore.Qt.Vertical)
+        vbox.addWidget(self.split)
 
         self.plotwidget1 = pg.PlotWidget()
-        vbox.addWidget(self.plotwidget1)
+        self.split.addWidget(self.plotwidget1)
 
         self.plotwidget2 = pg.PlotWidget()
-        vbox.addWidget(self.plotwidget2)
+        self.split.addWidget(self.plotwidget2)
 
         hbox = QtWidgets.QHBoxLayout()
 
@@ -463,12 +475,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
 if __name__ == '__main__':
 
-    try:
-        AppState.sdr_class = RTLSDR
-    except:
-        print("Couldn't open the SDR device -- use Random\n")
-        AppState.sdr_class = RandSDR
-        
+    AppState.sdr_class = RTLSDR
     AppState.radio_class = TS180S
     
     t = QtCore.QTimer()
