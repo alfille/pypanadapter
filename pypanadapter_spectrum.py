@@ -306,6 +306,14 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 #            m.setObjectName(r.name)
             m.triggered.connect(lambda state,nr=r: self.changeRadio(nr))
             radiomenu.addAction(m)
+        viewmenu = menu.addMenu('&View')
+
+        v = QtWidgets.QAction('Spectrogram',self,checkable=True,checked=True)
+        v.triggered.connect(lambda state: self.plotwidget2.setVisible(self.plotwidget2.isHidden()))
+        viewmenu.addAction(v)
+        v = QtWidgets.QAction('Waterfall',self,checkable=True,checked=True)
+        v.triggered.connect(lambda state: self.plotwidget1.setVisible(self.plotwidget1.isHidden()))
+        viewmenu.addAction(v)
         
     def makeSpectrum( self ):
         self.spectrum_plot = self.plotwidget2.plot()
@@ -398,7 +406,6 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.mode += 1
         if self.mode>1:
             self.mode = 0
-
 
     def on_autolevel_clicked(self):
         tmp_array = np.copy(self.img_array[self.img_array>0])
