@@ -1,3 +1,15 @@
+""" Paul H Alfille version
+Based on PyPanadapter forked from https://github.com/mcogoni/pypanadapter
+Marco Cogoni's excellent work
+This version does:
+1. Menu system
+2. Slidable panels
+3. Change radios
+4. command line arguments
+5. Also upgraded to Qt5 aned python3
+"""
+
+
 from rtlsdr import *
 from time import sleep
 import math
@@ -8,6 +20,9 @@ import pyqtgraph as pg
 #import pyaudio
 #from PyQt4 import QtCore, QtGui
 from PyQt5 import QtCore, QtWidgets
+import sys
+import argparse # for parsing the command line
+
 
 #FS = 2.4e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
 N_AVG = 128 # averaging over how many spectra
@@ -30,7 +45,13 @@ class TS480(Radio):
     # Intermediate Frquency
     IF = 73.095E6
 
-RadioList = [TS180S,X5105,TS480]
+class Custom(Radio):
+    name = "Custom Radio"
+    # Intermediate Frquency
+    def __init(self,IF):
+        self.IF = IF
+
+RadioClassList = [TS180S,X5105,TS480]
 
 class SDR:
     name = "None"
@@ -75,10 +96,12 @@ class RandSDR(SDR):
         pass
         
     def Read(self,size):
-        return 2*(np.random.random(size)+np.random.random(size)*1j)-(1.+1.j)
+        return 2*(np.random.random(int(size))+np.random.random(int(size))*1j)-(1.+1.j)
         
     def Close(self):
         self.driver = None
+ 
+SDRClassList = [RTLSDR, RandSDR]
         
 class appState:
     def __init__( self, sdr_class=None, radio_class=None ):
@@ -213,7 +236,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.plotwidget1.addItem(self.waterfall)
 
         self.plotwidget1.hideAxis("left")
-        self.plotwidget1.hideAxis("bottom")
+        #self.plotwidget1.hideAxis("bottom")
 
         # RED-GREEN Colormap
         pos = np.array([0., 0.5, 1.])
@@ -243,15 +266,15 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.waterfall.scale(self.bw_hz,1)
 #        self.setLabel('bottom', 'Frequency', units='kHz')
         
-        self.text_leftlim = pg.TextItem("-%.1f kHz"%(self.bw_hz*self.N_WIN/2.))
-        self.text_leftlim.setParentItem(self.waterfall)
-        self.plotwidget1.addItem(self.text_leftlim)
-        self.text_leftlim.setPos(0, 0)
+#        self.text_leftlim = pg.TextItem("-%.1f kHz"%(self.bw_hz*self.N_WIN/2.))
+#        self.text_leftlim.setParentItem(self.waterfall)
+#        self.plotwidget1.addItem(self.text_leftlim)
+#        self.text_leftlim.setPos(0, 0)
 
-        self.text_rightlim = pg.TextItem("+%.1f kHz"%(self.bw_hz*self.N_WIN/2.))
-        self.text_rightlim.setParentItem(self.waterfall)
-        self.plotwidget1.addItem(self.text_rightlim)
-        self.text_rightlim.setPos(self.bw_hz*(self.N_WIN-64), 0)
+#        self.text_rightlim = pg.TextItem("+%.1f kHz"%(self.bw_hz*self.N_WIN/2.))
+#        self.text_rightlim.setParentItem(self.waterfall)
+#        self.plotwidget1.addItem(self.text_rightlim)
+#        self.text_rightlim.setPos(self.bw_hz*(self.N_WIN-64), 0)
         
     def changeRadio( self, radio_class ):
         global AppState
@@ -260,7 +283,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
             self.Loop(True)
 
     def makeMenu( self ):
-        global RadioList
+        global RadioClassList
         global AppState
         menu = self.menuBar()
 
@@ -276,7 +299,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         radiomenu = menu.addMenu('&Radio')
 
-        for r in RadioList:
+        for r in RadioClassList:
             #print(f'IF={AppState.radio.IF} list={type(r)} Actual={type(AppState.radio)}')
             y = AppState.radio_class == r
             m = QtWidgets.QAction(r.name,self,checkable=y,checked=y)
@@ -315,11 +338,11 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.split.setOrientation(QtCore.Qt.Vertical)
         vbox.addWidget(self.split)
 
-        self.plotwidget1 = pg.PlotWidget()
-        self.split.addWidget(self.plotwidget1)
-
         self.plotwidget2 = pg.PlotWidget()
         self.split.addWidget(self.plotwidget2)
+
+        self.plotwidget1 = pg.PlotWidget()
+        self.split.addWidget(self.plotwidget1)
 
         hbox = QtWidgets.QHBoxLayout()
 
@@ -457,10 +480,10 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         self.waterfall.setImage(self.img_array.T, autoLevels=False, opacity = 1.0, autoDownsample=True)
 
-        self.text_leftlim.setPos(0, 0)
-        self.text_leftlim.setText(text="-%.1f kHz"%(self.bw_hz/2000./self.fft_ratio))
-        #self.text_rightlim.setPos(self.bw_hz*1000, 0)
-        self.text_rightlim.setText(text="+%.1f kHz"%(self.bw_hz/2000./self.fft_ratio))
+#        self.text_leftlim.setPos(0, 0)
+#        self.text_leftlim.setText(text="-%.1f kHz"%(self.bw_hz/2000./self.fft_ratio))
+#        #self.text_rightlim.setPos(self.bw_hz*1000, 0)
+#        self.text_rightlim.setText(text="+%.1f kHz"%(self.bw_hz/2000./self.fft_ratio))
 
         self.spectrum_plot.setData(np.arange(0,psd.shape[0]), -psd, pen="g")
 
@@ -473,10 +496,30 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         AppState.Loop=y_n
         QtWidgets.qApp.quit()
 
-if __name__ == '__main__':
+def CommandLine():
+    global RadioClassList
+    global SDRClassList
+    """Setup argparser object to process the command line"""
+    cl = argparse.ArgumentParser(description="PyPanadapter - radio panadapter using an SDR dongle on the IF (intermediate frequency of a radio by Paul H Alfille based on code of Marco Cogoni")
+    cl.add_argument("-s","--sdr",help="SDR model",choices=[c.__name__ for c in SDRClassList],nargs='?',default=SDRClassList[0].__name__)
+    cl.add_argument("-r","--radio",help="Radio model",choices=[r.__name__ for r in RadioClassList],nargs='?',default=RadioClassList[0].__name__)
+    cl.add_argument("-i","--if",help="Intermediate frequency -- overwrites radio default",type=float)
+    return cl.parse_args()
 
-    AppState.sdr_class = RTLSDR
-    AppState.radio_class = TS180S
+def find_in_class_list( clist, name ):
+    for c in clist:
+        if c.__name__ == name:
+            return c
+    return clist[0]
+
+def main(args):
+    global RadioClassList
+    global SDRClassList
+
+    args = CommandLine() # Get args from command line
+
+    AppState.sdr_class = find_in_class_list( SDRClassList, args.sdr)
+    AppState.radio_class = find_in_class_list( RadioClassList, args.radio)
     
     t = QtCore.QTimer()
 
@@ -489,5 +532,6 @@ if __name__ == '__main__':
         app.exec_()
         t.stop()
         app = None
-    
-#    pan.close()
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))
