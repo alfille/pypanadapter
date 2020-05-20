@@ -308,12 +308,24 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
             radiomenu.addAction(m)
         viewmenu = menu.addMenu('&View')
 
-        v = QtWidgets.QAction('Spectrogram',self,checkable=True,checked=True)
-        v.triggered.connect(lambda state: self.plotwidget2.setVisible(self.plotwidget2.isHidden()))
-        viewmenu.addAction(v)
-        v = QtWidgets.QAction('Waterfall',self,checkable=True,checked=True)
-        v.triggered.connect(lambda state: self.plotwidget1.setVisible(self.plotwidget1.isHidden()))
-        viewmenu.addAction(v)
+        v1 = QtWidgets.QAction('Waterfall',self,checkable=True,checked=True)
+        v2 = QtWidgets.QAction('Spectrogram',self,checkable=True,checked=True)
+        v1.triggered.connect(lambda state: self.TogglePanel(self.plotwidget1,v1,v2))
+        v2.triggered.connect(lambda state: self.TogglePanel(self.plotwidget2,v1,v2))
+        viewmenu.addAction(v2)
+        viewmenu.addAction(v1)
+  
+    def TogglePanel( self, panel, menu1, menu2 ):
+        if panel.isHidden():
+            panel.setVisible( True )
+            menu1.setDisabled( False )
+            menu2.setDisabled( False )
+        else:
+            panel.setVisible( False )
+            if panel != self.plotwidget1:
+                menu1.setDisabled( True )
+            else:
+                menu2.setDisabled( True )
         
     def makeSpectrum( self ):
         self.spectrum_plot = self.plotwidget2.plot()
