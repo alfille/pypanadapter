@@ -1,12 +1,12 @@
 This is a fork to
 1. make the code python3 
-   a. sudo apt-get install librtlsdr-dev
-   b. pip3 install pyrtlsdr
-   c. pip3 install numpy
-   d. pip3 install scipy -- required liblapack-dev gfortran 
-   e. pip3 install pyqtgraph
-   f. XXX pip3 install pyqt5 doesn't work so:
-   g. sudo apt-get install python3-pyqt5 python3-pyaudio
+a. sudo apt-get install librtlsdr-dev
+b. pip3 install pyrtlsdr
+c. pip3 install numpy
+d. pip3 install scipy -- required liblapack-dev gfortran 
+e. pip3 install pyqtgraph
+f. XXX pip3 install pyqt5 doesn't work so:
+g. sudo apt-get install python3-pyqt5 python3-pyaudio
    
    
    
