@@ -27,9 +27,22 @@ import argparse # for parsing the command line
 #FS = 2.4e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
 N_AVG = 128 # averaging over how many spectra
 
-class Radio:
-    name = "None"
+class Device():
+    @classmethod
+    def List(cls): # List of types
+        return [c for c in cls.__subclasses__()]
+            
+    @classmethod
+    def Match(cls,name): # List of types
+        cl = cls.List()
+        for c in cl:
+            if name == c.__name__:
+                return c
+        return cl[0]
 
+class Radio(Device):
+    name = "None"
+    
 class TS180S(Radio):
     name = "Kenwood TS-180S"
     # Intermediate Frquency
@@ -51,16 +64,14 @@ class Custom(Radio):
     def __init(self,IF):
         self.IF = IF
 
-RadioClassList = [TS180S,X5105,TS480]
-
-class SDR:
+class SDR(Device):
     name = "None"
     def __init(self):
         self.driver = None
         
     def Close(self):
         self.driver = None
-    
+
 class RTLSDR(SDR):
     SampleRate = 2.56E6  # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
     name = "RTL-SDR"
@@ -101,8 +112,6 @@ class RandSDR(SDR):
     def Close(self):
         self.driver = None
  
-SDRClassList = [RTLSDR, RandSDR]
-        
 class appState:
     def __init__( self, sdr_class=None, radio_class=None ):
         self._sdr_class = sdr_class
@@ -284,7 +293,6 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
             self.Loop(True)
 
     def makeMenu( self ):
-        global RadioClassList
         global AppState
         menu = self.menuBar()
 
@@ -300,7 +308,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         radiomenu = menu.addMenu('&Radio')
 
-        for r in RadioClassList:
+        for r in Radio.List():
             #print(f'IF={AppState.radio.IF} list={type(r)} Actual={type(AppState.radio)}')
             y = AppState.radio_class == r
             m = QtWidgets.QAction(r.name,self,checkable=y,checked=y)
@@ -520,29 +528,18 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         QtWidgets.qApp.quit()
 
 def CommandLine():
-    global RadioClassList
-    global SDRClassList
     """Setup argparser object to process the command line"""
     cl = argparse.ArgumentParser(description="PyPanadapter - radio panadapter using an SDR dongle on the IF (intermediate frequency of a radio by Paul H Alfille based on code of Marco Cogoni")
-    cl.add_argument("-s","--sdr",help="SDR model",choices=[c.__name__ for c in SDRClassList],nargs='?',default=SDRClassList[0].__name__)
-    cl.add_argument("-r","--radio",help="Radio model",choices=[r.__name__ for r in RadioClassList],nargs='?',default=RadioClassList[0].__name__)
+    cl.add_argument("-s","--sdr",help="SDR model",choices=[c.__name__ for c in SDR.List()],nargs='?',default=SDR.List()[0].__name__)
+    cl.add_argument("-r","--radio",help="Radio model",choices=[r.__name__ for r in Radio.List()],nargs='?',default=Radio.List()[0].__name__)
     cl.add_argument("-i","--if",help="Intermediate frequency -- overwrites radio default",type=float)
     return cl.parse_args()
 
-def find_in_class_list( clist, name ):
-    for c in clist:
-        if c.__name__ == name:
-            return c
-    return clist[0]
-
 def main(args):
-    global RadioClassList
-    global SDRClassList
-
     args = CommandLine() # Get args from command line
 
-    AppState.sdr_class = find_in_class_list( SDRClassList, args.sdr)
-    AppState.radio_class = find_in_class_list( RadioClassList, args.radio)
+    AppState.sdr_class = SDR.Match( args.sdr )
+    AppState.radio_class = Radio.Match( args.radio )
     
     t = QtCore.QTimer()
 
@@ -557,4 +554,6 @@ def main(args):
         app = None
 
 if __name__ == '__main__':
+#    for c in Radio.List():
+#        print(c.__name__)
     sys.exit(main(sys.argv))
