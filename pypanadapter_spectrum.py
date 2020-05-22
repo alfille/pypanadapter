@@ -19,7 +19,7 @@ from scipy.signal import welch, decimate
 import pyqtgraph as pg
 #import pyaudio
 #from PyQt4 import QtCore, QtGui
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtWidgets, QtGui
 import sys
 import argparse # for parsing the command line
 
@@ -210,6 +210,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         self.init_ui()
         self.qt_connections()
+        self.setMouseTracking(True)
 
         self.N_FFT = 2048 # FFT bins
         self.N_WIN = 1024  # How many pixels to show from the FFT (around the center)
@@ -234,6 +235,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
     def makeWaterfall( self ):
         self.waterfall = pg.ImageItem()
         self.plotwidget1.addItem(self.waterfall)
+        c=QtGui.QCursor()
 
         self.plotwidget1.hideAxis("left")
         #self.plotwidget1.hideAxis("bottom")
@@ -275,7 +277,11 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 #        self.text_rightlim.setParentItem(self.waterfall)
 #        self.plotwidget1.addItem(self.text_rightlim)
 #        self.text_rightlim.setPos(self.bw_hz*(self.N_WIN-64), 0)
-        
+
+    def mouseMoveEvent( self, evt ):
+        #self.StatBar.showMessage(mousexy.x())
+        print("{e.x() mouse\n")
+
     def changeRadio( self, radio_class ):
         global AppState
         AppState.radio_class = radio_class
@@ -351,11 +357,10 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.win = QtWidgets.QWidget()
         self.win.setWindowTitle('PEPYSCOPE - IS0KYB')
         
-        vbox = QtWidgets.QVBoxLayout()
-        vbox.addStretch()
-        
         self.split = QtWidgets.QSplitter()
         self.split.setOrientation(QtCore.Qt.Vertical)
+        
+        vbox = QtWidgets.QVBoxLayout()
         vbox.addWidget(self.split)
 
         self.plotwidget2 = pg.PlotWidget()
@@ -363,6 +368,8 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         self.plotwidget1 = pg.PlotWidget()
         self.split.addWidget(self.plotwidget1)
+#        pg.SignalProxy(self.plotwidget1.scene().sigMouseMoved, rateLimit=60, slot=self.mouseLoc )
+#        self.plotwidget1.scene().sigMouseMoved.connect(self.mouseLoc)
 
         hbox = QtWidgets.QHBoxLayout()
 
@@ -389,6 +396,9 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         self.setGeometry(10, 10, 1024, 512)
         self.setCentralWidget(self.win)
+        
+        self.StatBar = QtWidgets.QStatusBar(self)
+        self.setStatusBar(self.StatBar)
 
     def qt_connections(self):
         self.zoominbutton.clicked.connect(self.on_zoominbutton_clicked)
@@ -459,6 +469,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
             x_mix = decimate(x_mix, 2) # mix and decimate
 
         return x_mix 
+
 
     def update(self, chunk):
         self.bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)
