@@ -210,7 +210,6 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         self.init_ui()
         self.qt_connections()
-        self.setMouseTracking(True)
 
         self.N_FFT = 2048 # FFT bins
         self.N_WIN = 1024  # How many pixels to show from the FFT (around the center)
@@ -277,10 +276,6 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 #        self.text_rightlim.setParentItem(self.waterfall)
 #        self.plotwidget1.addItem(self.text_rightlim)
 #        self.text_rightlim.setPos(self.bw_hz*(self.N_WIN-64), 0)
-
-    def mouseMoveEvent( self, evt ):
-        #self.StatBar.showMessage(mousexy.x())
-        print("{e.x() mouse\n")
 
     def changeRadio( self, radio_class ):
         global AppState
@@ -368,8 +363,6 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         self.plotwidget1 = pg.PlotWidget()
         self.split.addWidget(self.plotwidget1)
-#        pg.SignalProxy(self.plotwidget1.scene().sigMouseMoved, rateLimit=60, slot=self.mouseLoc )
-#        self.plotwidget1.scene().sigMouseMoved.connect(self.mouseLoc)
 
         hbox = QtWidgets.QHBoxLayout()
 
