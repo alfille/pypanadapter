@@ -158,7 +158,7 @@ class PanAdapter():
         
         # configure device
         self.sdr_class = AppState.sdr_class # the SDR panadapter
-        print(f'Starting PAN radio {self.radio_class.name} sdr {self.sdr_class.name}\n',)
+        print(f'Starting PAN radio {self.radio_class.name} sdr {self.sdr_class.name}\n')
         
         # open sdr (or at least try
         try:
