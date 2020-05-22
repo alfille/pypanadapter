@@ -272,19 +272,19 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.waterfall.setLevels([self.minlev, self.maxlev])
 
         # setup the correct scaling for x-axis
-        self.bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)/1.e6/self.fft_ratio
-        self.waterfall.scale(self.bw_hz,1)
+        bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)/1.e6/self.fft_ratio
+        self.waterfall.scale(bw_hz,1)
 #        self.setLabel('bottom', 'Frequency', units='kHz')
         
-#        self.text_leftlim = pg.TextItem("-%.1f kHz"%(self.bw_hz*self.N_WIN/2.))
+#        self.text_leftlim = pg.TextItem("-%.1f kHz"%(bw_hz*self.N_WIN/2.))
 #        self.text_leftlim.setParentItem(self.waterfall)
 #        self.plotwidget1.addItem(self.text_leftlim)
 #        self.text_leftlim.setPos(0, 0)
 
-#        self.text_rightlim = pg.TextItem("+%.1f kHz"%(self.bw_hz*self.N_WIN/2.))
+#        self.text_rightlim = pg.TextItem("+%.1f kHz"%(bw_hz*self.N_WIN/2.))
 #        self.text_rightlim.setParentItem(self.waterfall)
 #        self.plotwidget1.addItem(self.text_rightlim)
-#        self.text_rightlim.setPos(self.bw_hz*(self.N_WIN-64), 0)
+#        self.text_rightlim.setPos(bw_hz*(self.N_WIN-64), 0)
 
     def changeRadio( self, radio_class ):
         global AppState
@@ -473,8 +473,8 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
 
     def update(self, chunk):
-        self.bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)
-        self.win.setWindowTitle('PEPYSCOPE - IS0KYB - N_FFT: %d, BW: %.1f kHz' % (self.N_FFT, self.bw_hz/1000./self.fft_ratio))
+        bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)
+        self.win.setWindowTitle('PEPYSCOPE - IS0KYB - N_FFT: %d, BW: %.1f kHz' % (self.N_FFT, bw_hz/1000./self.fft_ratio))
 
         if self.fft_ratio>1:
             chunk = self.zoomfft(chunk, self.fft_ratio)
@@ -512,9 +512,9 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.waterfall.setImage(self.img_array.T, autoLevels=False, opacity = 1.0, autoDownsample=True)
 
 #        self.text_leftlim.setPos(0, 0)
-#        self.text_leftlim.setText(text="-%.1f kHz"%(self.bw_hz/2000./self.fft_ratio))
-#        #self.text_rightlim.setPos(self.bw_hz*1000, 0)
-#        self.text_rightlim.setText(text="+%.1f kHz"%(self.bw_hz/2000./self.fft_ratio))
+#        self.text_leftlim.setText(text="-%.1f kHz"%(bw_hz/2000./self.fft_ratio))
+#        #self.text_rightlim.setPos(bw_hz*1000, 0)
+#        self.text_rightlim.setText(text="+%.1f kHz"%(bw_hz/2000./self.fft_ratio))
 
         self.spectrum_plot.setData(np.arange(0,psd.shape[0]), -psd, pen="g")
 
