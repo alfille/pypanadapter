@@ -6,7 +6,7 @@ This version does:
 2. Slidable panels
 3. Change radios
 4. command line arguments
-5. Also upgraded to Qt5 aned python3
+5. Also upgraded to Qt5 and python3
 """
 
 
@@ -41,25 +41,30 @@ class Device():
         return cl[0]
 
 class Radio(Device):
-    name = "None"
+    make = "None"
+    model = "None"
     
 class TS180S(Radio):
-    name = "Kenwood TS-180S"
+    make = "Kenwood"
+    model = "TS-180S"
     # Intermediate Frquency
     IF = 8.8315E6
     
 class X5105(Radio):
-    name = "Xiegu X5105"
+    make = "Xiegu"
+    model = "X5105"
     # Intermediate Frquency
     IF = 70.455E6
 
 class TS480(Radio):
-    name = "Kenwood TS-480SAT"
+    make = "Kenwood"
+    model = "TS-480SAT"
     # Intermediate Frquency
     IF = 73.095E6
 
 class Custom(Radio):
-    name = "Custom Radio"
+    make = "Custom"
+    model = "Specified"
     # Intermediate Frquency
     def __init(self,IF):
         self.IF = IF
@@ -219,7 +224,7 @@ class PanAdapter():
         
         # configure device
         self.sdr_class = AppState.sdr_class # the SDR panadapter
-        print(f'Starting PAN radio {self.radio_class.name} sdr {self.sdr_class.name}\n')
+        print(f'Starting PAN radio {self.radio_class.make} / {self.radio_class.model} sdr {self.sdr_class.name}\n')
         
         # open sdr (or at least try
         try:
@@ -228,7 +233,7 @@ class PanAdapter():
             print("Could not open sdr {self.sdr_class} -- switch to random\n")
             AppState.sdr_class = RandSDR
             self.sdr_class = AppState.sdr_class
-            print(f'Starting PAN radio {self.radio_class.name} sdr {self.sdr_class.name}\n',)
+            print(f'Starting PAN radio {self.radio_class.make} / {self.radio_class.model} sdr {self.sdr_class.name}\n')
             self.sdr = self.sdr_class()
             
         self.changef( self.radio_class.IF )
@@ -351,15 +356,16 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         radiomenu = menu.addMenu('&Radio')
 
+        make_dict = {}
         for r in Radio.List():
-            #print(f'IF={AppState.radio.IF} list={type(r)} Actual={type(AppState.radio)}')
+            if r.make not in make_dict:
+                make_dict[r.make] = radiomenu.addMenu(r.make)
             y = AppState.radio_class == r
-            m = QtWidgets.QAction(r.name,self,checkable=y,checked=y)
-#            m.setObjectName(r.name)
+            m = QtWidgets.QAction(r.model,self,checkable=y,checked=y)
             m.triggered.connect(lambda state,nr=r: self.changeRadio(nr))
-            radiomenu.addAction(m)
-        viewmenu = menu.addMenu('&View')
+            make_dict[r.make].addAction(m)
 
+        viewmenu = menu.addMenu('&View')
         v1 = QtWidgets.QAction('Waterfall',self,checkable=True,checked=True)
         v2 = QtWidgets.QAction('Spectrogram',self,checkable=True,checked=True)
         v1.triggered.connect(lambda state: self.TogglePanel(self.plotwidget1,v1,v2))
