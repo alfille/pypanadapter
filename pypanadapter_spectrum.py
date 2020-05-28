@@ -10,7 +10,7 @@ This version does:
 """
 
 
-from rtlsdr import *
+#from rtlsdr import *
 from time import sleep
 import math
 import random
@@ -81,8 +81,28 @@ class SDR(Device):
 class RTLSDR(SDR):
     SampleRate = 2.56E6  # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
     name = "RTL-SDR"
-    def __init__(self):
-        self.driver = RtlSdr()
+    def __init__(self,serial=None,index=None,host=None,port=12345):
+        self.serial = serial
+        self.index = index
+        self.host = host
+        self.port = port
+        try:
+            import rtlsdr
+        except:
+            print("RTLSDR module not available -- try pip3 install pyrtlsdr")
+            raise
+        try:
+            if self.serial:
+                self.driver = RtlSdr(serial_number = self.serial)
+            elif self.index:
+                self.driver = RtlSdr(self.index)
+            elif self.host:
+                self.driver = RtlSdrTcpClient( hostname=self.host, port=self.port ) 
+            else:
+                self.driver = RtlSdr()
+        except:
+            print("RTLSDR not found")
+            raise
         self.driver.sample_rate = self.SampleRate
         
     def SetFrequency(self, IF ):
@@ -234,7 +254,7 @@ class PanAdapter():
         try:
             self.sdr = self.sdr_class()
         except:
-            print("Could not open sdr {self.sdr_class} -- switch to random\n")
+            print(f'Could not open sdr {self.sdr_class.name} -- switch to random\n')
             AppState.sdr_class = RandSDR
             self.sdr_class = AppState.sdr_class
             print(f'Starting PAN radio {self.radio_class.make} / {self.radio_class.model} sdr {self.sdr_class.name}\n')
@@ -417,10 +437,8 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         # Plot the grid
         for x in [0, self.N_WIN//2, self.N_WIN-1]:
             if x==0 or x==self.N_WIN-1:
-                #pass
                 self.img_array[:,x] = 0
             else:
-                #pass
                 self.img_array[:,x] = 0
 
     def init_ui(self):
@@ -436,7 +454,6 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         Panels.clear()
         self.w_pan = Panels( "Waterfall", self.makeWaterfall, self.split )
         self.s_pan = Panels( "Spectrogram", self.makeSpectrum, self.split )
-        self.w_pan = Panels( "Waterfall2", self.makeWaterfall, self.split )
 
         hbox = QtWidgets.QHBoxLayout()
 
