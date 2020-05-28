@@ -17,8 +17,6 @@ import random
 import numpy as np
 from scipy.signal import welch, decimate
 import pyqtgraph as pg
-#import pyaudio
-#from PyQt4 import QtCore, QtGui
 from PyQt5 import QtCore, QtWidgets, QtGui
 import sys
 import argparse # for parsing the command line
@@ -28,6 +26,7 @@ import argparse # for parsing the command line
 Initial_N_AVG = 128 # averaging over how many spectra
 
 class Device():
+    # base class that give subclass list and matching
     @classmethod
     def List(cls): # List of types
         return [c for c in cls.__subclasses__()]
@@ -41,6 +40,7 @@ class Device():
         return cl[0]
 
 class Radio(Device):
+    # device being pan-adapterd. Have make / model / intermediate frequency
     make = "None"
     model = "None"
     
@@ -70,6 +70,7 @@ class Custom(Radio):
         self.IF = IF
 
 class SDR(Device):
+    # Pan adapter device including RTLSDR
     name = "None"
     def __init(self):
         self.driver = None
@@ -118,6 +119,7 @@ class RandSDR(SDR):
         self.driver = None
 
 class Mode(Device):
+    # Signal types
     _changed = False
     _mode = None
     _list = None
@@ -161,6 +163,7 @@ class LSB(Mode):
         
  
 class appState:
+    # holds program "state"
     refresh = 50 # default refresh timer in msec
     def __init__( self, sdr_class=None, radio_class=None ):
         self._sdr_class = sdr_class
@@ -217,6 +220,7 @@ class appState:
 AppState = appState()
 
 class PanAdapter():
+    # container class
     def __init__(self ):
         global AppState
         
@@ -255,8 +259,43 @@ class PanAdapter():
         AppState.Loop=y_n
         self.qApp.quit()
 
-class SpectrogramWidget(QtWidgets.QMainWindow):
+class Panels():
+    List = []
+    def __init__(self, name, func, split):
+        self.name = name
+        self.plot = pg.PlotWidget()
+        func(self.plot)
+        split.addWidget(self.plot)
+        self.visible = True
+        type(self).List.append( self )
 
+    @classmethod
+    def clear( cls ):
+        cls.List.clear()
+    
+    @classmethod
+    def addMenus( cls, menu, master ):
+        for p in cls.List:
+            v = QtWidgets.QAction(p.name,master,checkable=True,checked=p.visible)
+            v.triggered.connect(p.toggle)
+            p.menu = v
+            menu.addAction(v)
+
+    def toggle( self ):
+        if self.visible:
+            self.plot.setVisible( False )
+            self.visible = False
+            v = [ p for p in type(self).List if p.visible ]
+            if len(v) == 1:
+                v[0].menu.setDisabled( True )        
+        else:
+            self.plot.setVisible( True )
+            self.visible = True
+            for p in type(self).List:
+                p.menu.setDisabled( False )
+        
+class SpectrogramWidget(QtWidgets.QMainWindow):
+    # Display class
     #define a custom signal
     read_collected = QtCore.pyqtSignal(np.ndarray)
 
@@ -266,16 +305,13 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         global AppState
         self.sdr = sdr
 
-        self.init_ui()
-        self.qt_connections()
-
         self.N_FFT = 2048 # FFT bins
         self.N_WIN = 1024  # How many pixels to show from the FFT (around the center)
         self.N_AVG = Initial_N_AVG
         self.fft_ratio = 2.
 
-        self.makeWaterfall()
-        self.makeSpectrum()
+        self.init_ui()
+        self.qt_connections()
 
         pg.setConfigOptions(antialias=False)
 
@@ -288,12 +324,12 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         self.show()
 
-    def makeWaterfall( self ):
+    def makeWaterfall( self, panel ):
         self.waterfall = pg.ImageItem()
-        self.plotwidget1.addItem(self.waterfall)
+        panel.addItem(self.waterfall)
         c=QtGui.QCursor()
 
-        self.plotwidget1.hideAxis("left")
+        panel.hideAxis("left")
         #self.plotwidget1.hideAxis("bottom")
 
         # RED-GREEN Colormap
@@ -366,32 +402,15 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
             make_dict[r.make].addAction(m)
 
         viewmenu = menu.addMenu('&View')
-        v1 = QtWidgets.QAction('Waterfall',self,checkable=True,checked=True)
-        v2 = QtWidgets.QAction('Spectrogram',self,checkable=True,checked=True)
-        v1.triggered.connect(lambda state: self.TogglePanel(self.plotwidget1,v1,v2))
-        v2.triggered.connect(lambda state: self.TogglePanel(self.plotwidget2,v1,v2))
-        viewmenu.addAction(v2)
-        viewmenu.addAction(v1)
-  
-    def TogglePanel( self, panel, menu1, menu2 ):
-        if panel.isHidden():
-            panel.setVisible( True )
-            menu1.setDisabled( False )
-            menu2.setDisabled( False )
-        else:
-            panel.setVisible( False )
-            if panel != self.plotwidget1:
-                menu1.setDisabled( True )
-            else:
-                menu2.setDisabled( True )
-        
-    def makeSpectrum( self ):
-        self.spectrum_plot = self.plotwidget2.plot()
-        self.plotwidget2.setYRange(-250, -100, padding=0.)
-        #self.plotwidget2.showGrid(x=True, y=True)
+        Panels.addMenus( viewmenu, self )
 
-        self.plotwidget2.hideAxis("left")
-        self.plotwidget2.hideAxis("bottom")
+    def makeSpectrum( self, panel ):
+        self.spectrum_plot = panel.plot()
+        panel.setYRange(-250, -100, padding=0.)
+        #panel.showGrid(x=True, y=True)
+
+        panel.hideAxis("left")
+        panel.hideAxis("bottom")
 
     def init_image(self):
         self.img_array = 250*np.ones((self.N_WIN//4, self.N_WIN))
@@ -404,7 +423,6 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
                 #pass
                 self.img_array[:,x] = 0
 
-
     def init_ui(self):
         self.win = QtWidgets.QWidget()
         self.win.setWindowTitle('PEPYSCOPE - IS0KYB')
@@ -415,11 +433,10 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         vbox = QtWidgets.QVBoxLayout()
         vbox.addWidget(self.split)
 
-        self.plotwidget2 = pg.PlotWidget()
-        self.split.addWidget(self.plotwidget2)
-
-        self.plotwidget1 = pg.PlotWidget()
-        self.split.addWidget(self.plotwidget1)
+        Panels.clear()
+        self.w_pan = Panels( "Waterfall", self.makeWaterfall, self.split )
+        self.s_pan = Panels( "Spectrogram", self.makeSpectrum, self.split )
+        self.w_pan = Panels( "Waterfall2", self.makeWaterfall, self.split )
 
         hbox = QtWidgets.QHBoxLayout()
 
@@ -486,7 +503,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         print( self.minlev, self.maxlev )
         self.waterfall.setLevels([self.minlev, self.maxlev])
 
-        self.plotwidget2.setYRange(-self.minminlev, -self.maxlev, padding=0.3)
+        self.panels[1].setYRange(-self.minminlev, -self.maxlev, padding=0.3)
 
     def on_invertscroll_clicked(self):
         self.scroll *= -1
@@ -595,6 +612,4 @@ def main(args):
         app = None
 
 if __name__ == '__main__':
-    for c in Radio.List():
-        print(c.__name__)
     sys.exit(main(sys.argv))
