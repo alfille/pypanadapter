@@ -25,7 +25,7 @@ import argparse # for parsing the command line
 
 
 #FS = 2.4e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
-N_AVG = 128 # averaging over how many spectra
+Initial_N_AVG = 128 # averaging over how many spectra
 
 class Device():
     @classmethod
@@ -111,13 +111,66 @@ class RandSDR(SDR):
         
     def Close(self):
         self.driver = None
+
+class Mode(Device):
+    _changed = False
+    _mode = None
+    _list = None
+    _index = 0
+    _len = 0
+
+    @classmethod
+    def next(cls):
+        if cls._list == None:
+            cls._list = cls.List()
+            cls._len = len(cls._list)
+        cls._index += 1
+        if cls._index >= cls._len:
+            cls._index = 0
+        cls._changed = True
+
+    @classmethod
+    def changed(cls):
+        c = cls._changed
+        cls._changed = False
+        return c
+        
+    @classmethod
+    def mode(cls):
+        return cls._list[cls._index]
+
+class AM(Mode):
+    @classmethod
+    def freq(cls,radio_class):
+        return radio_class.IF
+        
+class USB(Mode):
+    @classmethod
+    def freq(cls,radio_class):
+        return radio_class.IF-3000
+        
+class LSB(Mode):
+    @classmethod
+    def freq(cls,radio_class):
+        return radio_class.IF+3000
+        
  
 class appState:
+    refresh = 50 # default refresh timer in msec
     def __init__( self, sdr_class=None, radio_class=None ):
         self._sdr_class = sdr_class
         self._radio_class = radio_class
         self._resetNeeded = False
         self._Loop = True # for initial entry into loop
+        self.timer = QtCore.QTimer() #default
+        self.refresh = type(self).refresh
+
+    def Start(self,proc):
+        self.timer.timeout.connect(proc)
+        self.timer.start(self.refresh)
+        
+    def Stop(self):
+        self.timer.stop()
 
     @property
     def Loop(self):
@@ -160,7 +213,6 @@ AppState = appState()
 
 class PanAdapter():
     def __init__(self ):
-        self.mode = 0 # LSB or USB
         global AppState
         
         self.radio_class = AppState.radio_class # The radio
@@ -183,20 +235,12 @@ class PanAdapter():
         self.widget = SpectrogramWidget(self.sdr)
                 
     def read(self):
+        if Mode.changed():
+            self.changef(Mode.mode().freq(self.radio_class))
         self.widget.read_collected.emit(self.sdr.Read(self.widget.N_AVG*self.widget.N_FFT))
 
     def changef(self, F_SDR):
         self.sdr.SetFrequency( F_SDR )
-
-
-    def update_mode(self):
-        if self.widget.mode!=self.mode:
-            sign = (self.widget.mode-self.mode)
-            sign /= math.fabs(sign)
-            if sign<0:
-                sign = 0
-            self.changef(self.radio.IF-sign*3000)
-            self.mode = self.widget.mode
     
     def close(self):
         self.sdr.Close()
@@ -222,7 +266,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         self.N_FFT = 2048 # FFT bins
         self.N_WIN = 1024  # How many pixels to show from the FFT (around the center)
-        self.N_AVG = N_AVG
+        self.N_AVG = Initial_N_AVG
         self.fft_ratio = 2.
 
         self.makeWaterfall()
@@ -230,7 +274,6 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         pg.setConfigOptions(antialias=False)
 
-        self.mode = 0 # USB=0, LSB=1: defaults to USB
         self.scroll = -1
         
         self.init_image()
@@ -378,7 +421,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.zoomoutbutton = QtWidgets.QPushButton("ZOOM OUT")
         self.avg_increase_button = QtWidgets.QPushButton("AVG +")
         self.avg_decrease_button = QtWidgets.QPushButton("AVG -")
-        self.modechange = QtWidgets.QPushButton("USB")
+        self.modechange = QtWidgets.QPushButton(Mode.mode().__name__)
         self.invertscroll = QtWidgets.QPushButton("Scroll")
         self.autolevel = QtWidgets.QPushButton("Auto Levels")
 
@@ -422,13 +465,8 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
 
     def on_modechange_clicked(self):
-        if self.mode == 0:
-            self.modechange.setText("LSB")
-        elif self.mode == 1:
-            self.modechange.setText("USB")
-        self.mode += 1
-        if self.mode>1:
-            self.mode = 0
+        Mode.next()
+        self.modechange.setText(Mode.mode().__name__)
 
     def on_autolevel_clicked(self):
         tmp_array = np.copy(self.img_array[self.img_array>0])
@@ -470,7 +508,6 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
             x_mix = decimate(x_mix, 2) # mix and decimate
 
         return x_mix 
-
 
     def update(self, chunk):
         bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)
@@ -538,22 +575,20 @@ def CommandLine():
 def main(args):
     args = CommandLine() # Get args from command line
 
+    Mode.next() # prime mode list
+
     AppState.sdr_class = SDR.Match( args.sdr )
     AppState.radio_class = Radio.Match( args.radio )
     
-    t = QtCore.QTimer()
-
     while AppState.Loop:
         app = QtWidgets.QApplication([])
         pan = PanAdapter()
-        t.timeout.connect(pan.update_mode)
-        t.timeout.connect(pan.read)
-        t.start(50) # max theoretical refresh rate 100 fps
+        AppState.Start(pan.read)
         app.exec_()
-        t.stop()
+        AppState.Stop()
         app = None
 
 if __name__ == '__main__':
-#    for c in Radio.List():
-#        print(c.__name__)
+    for c in Radio.List():
+        print(c.__name__)
     sys.exit(main(sys.argv))
