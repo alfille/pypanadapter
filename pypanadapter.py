@@ -6,7 +6,7 @@ from scipy.signal import welch, decimate
 import pyqtgraph as pg
 #import pyaudio
 #from PyQt4 import QtCore, QtGui
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtWidgets, QtDBus
 
 #FS = 1.0e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
 N_AVG = 32 # averaging over how many spectra
@@ -292,6 +292,140 @@ class SpectrogramWidget(pg.PlotWidget):
         self.text_leftlim.setText(text="-%.1f kHz"%(self.bw_hz/2000./self.fft_ratio))
         #self.text_rightlim.setPos(self.bw_hz*1000, 0)
         self.text_rightlim.setText(text="+%.1f kHz"%(self.bw_hz/2000./self.fft_ratio))
+
+# from https://gist.github.com/fladi/8bebdba4c47051afa7cad46e3ead6763 Michael Fladischer
+class Service(QtCore.QObject):
+
+    def __init__(
+        self,
+        interface,
+        protocol,
+        name,
+        stype,
+        domain,
+        host=None,
+        aprotocol=None,
+        address=None,
+        port=None,
+        txt=None
+    ):
+        super(Service, self).__init__()
+        self.interface = interface
+        self.protocol = protocol
+        self.name = name
+        self.stype = stype
+        self.domain = domain
+        self.host = host
+        self.aprotocol = aprotocol
+        self.address = address
+        self.port = port
+        self.txt = txt
+
+
+    def __str__(self):
+        return '{s.name} ({s.stype}.{s.domain})'.format(s=self)
+
+    def __eq__(self, other):
+        return self.__dict__ == other.__dict__
+
+
+class Discoverer(QtCore.QObject):
+
+    # Use those signals to get notified of changes in subscribed services
+    # Emitted when initial scanning of avahi services is done
+    initialized = QtCore.pyqtSignal()
+    # Emitted when a new service for our watched type is found
+    added = QtCore.pyqtSignal(Service)
+    removed = QtCore.pyqtSignal(Service)
+
+    def __init__(self, parent, service, interface=-1, protocol=-1, domain='local'):
+        super(Discoverer, self).__init__(parent)
+        self.protocol = protocol
+        self.bus = QtDBus.QDBusConnection.systemBus()
+        self.bus.registerObject('/', self)
+        self.server = QtDBus.QDBusInterface(
+            'org.freedesktop.Avahi',
+            '/',
+            'org.freedesktop.Avahi.Server',
+            self.bus
+        )
+        flags = QtCore.QVariant(0)
+        flags.convert(QtCore.QVariant.UInt)
+        browser_path = self.server.call(
+            'ServiceBrowserNew',
+            interface,
+            self.protocol,
+            service,
+            domain,
+            flags
+        )
+        print('New ServiceBrowser: {}'.format(browser_path.arguments()))
+        self.bus.connect(
+            'org.freedesktop.Avahi',
+            browser_path.arguments()[0],
+            'org.freedesktop.Avahi.ServiceBrowser',
+            'ItemNew',
+            self.onItemNew
+        )
+        self.bus.connect(
+            'org.freedesktop.Avahi',
+            browser_path.arguments()[0],
+            'org.freedesktop.Avahi.ServiceBrowser',
+            'ItemRemove',
+            self.onItemRemove
+        )
+        self.bus.connect(
+            'org.freedesktop.Avahi',
+            browser_path.arguments()[0],
+            'org.freedesktop.Avahi.ServiceBrowser',
+            'AllForNow',
+            self.onAllForNow
+        )
+
+    @QtCore.pyqtSlot(QtDBus.QDBusMessage)
+    def onItemNew(self, msg):
+        print('Avahi service discovered: {}'.format(msg.arguments()))
+        flags = QtCore.QVariant(0)
+        flags.convert(QtCore.QVariant.UInt)
+        resolved = self.server.callWithArgumentList(
+            QtDBus.QDBus.AutoDetect,
+            'ResolveService',
+            [
+                *msg.arguments()[:5],
+                self.protocol,
+                flags
+            ]
+        ).arguments()
+        print('\tAvahi service resolved: {}'.format(resolved))
+        service = Service(*resolved[:10])
+        self.added.emit(service)
+
+    @QtCore.pyqtSlot(QtDBus.QDBusMessage)
+    def onItemRemove(self, msg):
+        arguments = msg.arguments()
+        print('Avahi service removed: {}'.format(arguments))
+        service = Service(*arguments[:5])
+        self.removed.emit(service)
+
+    @QtCore.pyqtSlot(QtDBus.QDBusMessage)
+    def onAllForNow(self, msg):
+        print('Avahi emitted all signals for discovered peers')
+        self.initialized.emit()
+
+
+# Main Function
+if __name__ == '__main__':
+
+    # Create main app
+    app = QApplication(sys.argv)
+
+    # Create avahi discoverer
+#    d = Discoverer(app, '_workstation._tcp')
+    d = Discoverer(app, '_soapy._tcp')
+
+    # Execute the application and exit
+    sys.exit(app.exec_())
+
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication([])

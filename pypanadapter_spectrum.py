@@ -1,3 +1,5 @@
+#/usr/bin/env python3
+
 """ Paul H Alfille version
 Based on PyPanadapter forked from https://github.com/mcogoni/pypanadapter
 Marco Cogoni's excellent work
@@ -17,10 +19,9 @@ import random
 import numpy as np
 from scipy.signal import welch, decimate
 import pyqtgraph as pg
-from PyQt5 import QtCore, QtWidgets, QtGui
+from PyQt5 import QtCore, QtWidgets, QtGui, QtDBus
 import sys
 import argparse # for parsing the command line
-
 
 #FS = 2.4e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
 Initial_N_AVG = 128 # averaging over how many spectra
@@ -192,6 +193,8 @@ class appState:
         self._Loop = True # for initial entry into loop
         self.timer = QtCore.QTimer() #default
         self.refresh = type(self).refresh
+        self._soapylist = {}
+        self.discover = None
 
     def Start(self,proc):
         self.timer.timeout.connect(proc)
@@ -235,6 +238,18 @@ class appState:
         if sdr_class != self._sdr_class:
             self._resetNeeded = True
         self._sdr_class = sdr_class
+        
+    def SoapyAdd( self, address, port, name ):
+        print("add",address,port,name)
+        self._soapylist[(address,port)] = name
+        
+    def SoapyDel( self, address, port ):
+        print("del",address,port,name)
+        del self._soapylist[(address,port)]
+        
+    @property
+    def soapylist( self ):
+        return self._soapylist
 
 #global
 AppState = appState()
@@ -410,6 +425,14 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         m.triggered.connect(lambda state, y=False: self.Loop(y))
         filemenu.addAction(m)
 
+        panmenu = menu.addMenu('&Panadapter')
+        if AppState.discover:
+            for ((address,port),name) in AppState.soapylist.items():
+                print("Pan",name)
+                m = QtWidgets.QAction('{}\t\t{} : {}'.format(name,address,port),self)
+                m.triggered.connect(lambda state,a=address,p=port,n=name: self.setsdr(a,p,n))
+                panmenu.addAction(m)
+
         radiomenu = menu.addMenu('&Radio')
 
         make_dict = {}
@@ -423,6 +446,9 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
         viewmenu = menu.addMenu('&View')
         Panels.addMenus( viewmenu, self )
+
+    def setsdr( self, address, port, name):
+        print("setsdr",address,port,name)
 
     def makeSpectrum( self, panel ):
         self.spectrum_plot = panel.plot()
@@ -604,6 +630,121 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         AppState.Loop=y_n
         QtWidgets.qApp.quit()
 
+# from https://gist.github.com/fladi/8bebdba4c47051afa7cad46e3ead6763 Michael Fladischer
+# from https://gist.github.com/fladi/8bebdba4c47051afa7cad46e3ead6763 Michael Fladischer
+class Service(QtCore.QObject):
+
+    def __init__(
+        self,
+        interface,
+        protocol,
+        name,
+        stype,
+        domain,
+        host=None,
+        aprotocol=None,
+        address=None,
+        port=None,
+        txt=None
+    ):
+        super(Service, self).__init__()
+        self.interface = interface
+        self.protocol = protocol
+        self.name = name
+        self.stype = stype
+        self.domain = domain
+        self.host = host
+        self.aprotocol = aprotocol
+        self.address = address
+        self.port = port
+        self.txt = txt
+
+
+    def __str__(self):
+        return '{s.name} ({s.stype}.{s.domain})'.format(s=self)
+
+    def __eq__(self, other):
+        return self.__dict__ == other.__dict__
+
+
+class Discoverer(QtCore.QObject):
+
+    def __init__(self, parent, service, interface=-1, protocol=-1, domain='local'):
+        super(Discoverer, self).__init__(parent)
+        self.protocol = protocol
+        self.bus = QtDBus.QDBusConnection.systemBus()
+        self.bus.registerObject('/', self)
+        self.server = QtDBus.QDBusInterface(
+            'org.freedesktop.Avahi',
+            '/',
+            'org.freedesktop.Avahi.Server',
+            self.bus
+        )
+        flags = QtCore.QVariant(0)
+        flags.convert(QtCore.QVariant.UInt)
+        browser_path = self.server.call(
+            'ServiceBrowserNew',
+            interface,
+            self.protocol,
+            service,
+            domain,
+            flags
+        )
+        print('New ServiceBrowser: {}'.format(browser_path.arguments()))
+        self.bus.connect(
+            'org.freedesktop.Avahi',
+            browser_path.arguments()[0],
+            'org.freedesktop.Avahi.ServiceBrowser',
+            'ItemNew',
+            self.onItemNew
+        )
+        self.bus.connect(
+            'org.freedesktop.Avahi',
+            browser_path.arguments()[0],
+            'org.freedesktop.Avahi.ServiceBrowser',
+            'ItemRemove',
+            self.onItemRemove
+        )
+        self.bus.connect(
+            'org.freedesktop.Avahi',
+            browser_path.arguments()[0],
+            'org.freedesktop.Avahi.ServiceBrowser',
+            'AllForNow',
+            self.onAllForNow
+        )
+        
+    def __delete__(self):
+        print("Delete Discoverer")
+        self.server = None
+        self.bus = None
+
+    @QtCore.pyqtSlot(QtDBus.QDBusMessage)
+    def onItemNew(self, msg):
+        print('Avahi service discovered: {}'.format(msg.arguments()))
+        flags = QtCore.QVariant(0)
+        flags.convert(QtCore.QVariant.UInt)
+        resolved = self.server.callWithArgumentList(
+            QtDBus.QDBus.AutoDetect,
+            'ResolveService',
+            [
+                *msg.arguments()[:5],
+                self.protocol,
+                flags
+            ]
+        ).arguments()
+        print('\tAvahi service resolved: {}'.format(resolved))
+        AppState.SoapyAdd( resolved[7],resolved[8],resolved[2] )
+
+    @QtCore.pyqtSlot(QtDBus.QDBusMessage)
+    def onItemRemove(self, msg):
+        arguments = msg.arguments()
+        print('Avahi service removed: {}'.format(arguments))
+        AppState.SoapyDel( resolved[7],resolved[8] )
+
+    @QtCore.pyqtSlot(QtDBus.QDBusMessage)
+    def onAllForNow(self, msg):
+        print('Avahi emitted all signals for discovered peers')
+
 def CommandLine():
     """Setup argparser object to process the command line"""
     cl = argparse.ArgumentParser(description="PyPanadapter - radio panadapter using an SDR dongle on the IF (intermediate frequency of a radio by Paul H Alfille based on code of Marco Cogoni")
@@ -622,6 +763,12 @@ def main(args):
     
     while AppState.Loop:
         app = QtWidgets.QApplication([])
+        if not AppState.discover:
+            try:
+                AppState.discover = Discoverer(app, '_soapy._tcp')
+            except:
+                AppState.discover = None
+        print("AppState.discover",AppState.discover)
         pan = PanAdapter()
         AppState.Start(pan.read)
         app.exec_()
