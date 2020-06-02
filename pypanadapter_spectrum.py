@@ -317,6 +317,7 @@ AppState = appState()
 class ApplicationDisplay():
     # container class
     def __init__(self ):
+        # Comes in with Panadapter set and readio_class set.
         global AppState
         
         self.radio_class = AppState.radio_class # The radio
@@ -325,8 +326,6 @@ class ApplicationDisplay():
         self.panadapter = AppState.panadapter # the PanClass panadapter
         print(f'Starting PAN radio {self.radio_class.make} / {self.radio_class.model} sdr {self.panadapter.name}\n')
         
-        # open sdr (or at least try
-            
         self.changef( self.radio_class.IF )
         self.widget = SpectrogramWidget()
                 
@@ -351,6 +350,9 @@ class ApplicationDisplay():
         self.qApp.quit()
 
 class Panels():
+    # manage the displaypanels -- waterfall and spectrogram so far
+    # some complicated logic for menu system to never allow no panels, and disable the menu entry that might allow it, to be clearer.
+    # actually can handle an arbitrary number of panels
     List = []
     def __init__(self, name, func, split):
         self.name = name
