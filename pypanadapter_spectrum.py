@@ -23,11 +23,11 @@ from PyQt5 import QtCore, QtWidgets, QtGui, QtDBus
 import sys
 import argparse # for parsing the command line
 
-#FS = 2.4e6 # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+#FS = 2.4e6 # Sampling Frequency of the RTL-PanClass card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
 Initial_N_AVG = 128 # averaging over how many spectra
 
-class Device():
-    # base class that give subclass list and matching
+class SubclassManager():
+    # base class that gives subclass list and matching
     @classmethod
     def List(cls): # List of types
         return [c for c in cls.__subclasses__()]
@@ -40,7 +40,7 @@ class Device():
                 return c
         return cl[0]
 
-class Radio(Device):
+class Radio(SubclassManager):
     # device being pan-adapterd. Have make / model / intermediate frequency
     make = "None"
     model = "None"
@@ -70,7 +70,7 @@ class Custom(Radio):
     def __init(self,IF):
         self.IF = IF
 
-class SDR(Device):
+class PanClass(SubclassManager):
     # Pan adapter device including RTLSDR
     name = "None"
     def __init(self):
@@ -79,9 +79,9 @@ class SDR(Device):
     def Close(self):
         self.driver = None
 
-class RTLSDR(SDR):
-    SampleRate = 2.56E6  # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
-    name = "RTL-SDR"
+class RTLSDR(PanClass):
+    SampleRate = 2.56E6  # Sampling Frequency of the RTL-PanClass card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+    name = "RTL-PanClass"
     def __init__(self,serial=None,index=None,host=None,port=12345):
         self.serial = serial
         self.index = index
@@ -124,8 +124,46 @@ class RTLSDR(SDR):
             self.driver.close()
         self.driver = None
 
-class RandSDR(SDR):
-    SampleRate = 2.56E6  # Sampling Frequency of the RTL-SDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+class AudioPan(PanClass):
+    SampleRate = 44100.0
+    name = "Audio"
+    def __init__(self,index):
+        global AppState
+        if AppState.audio:
+            try:
+                info = AppState.audio.get_device_info_by_index( index)
+                self.name = info['name']
+                type(self).name = self.name
+                self.SampleRate = info['maxSampleRate']
+                type(self).SampleRate = self.SampleRate
+                self.driver = AppState.audio.open(format=pyaudio.paFloat32, channels=1, rate=int(self.SampleRate), input=True, output=False, input_device_index = index )
+            except:
+                self.driver = None
+        self.index = index
+        
+    def SetFrequency(self, IF ):
+        self.center_freq = IF
+        
+    def Read(self,size):
+        if self.driver:
+            # I only
+            try:
+                s =self.driver.read(2*size)
+                print(s)
+                n = np.fromstring( s )
+                print(n)
+                return n
+#                return np.fromstring( self.driver.read(size), 'float32' )
+            except:
+                return np.zeros( (2*size,), 'float32' )
+        
+    def Close(self):
+        if self.driver:
+            self.driver.close()
+        self.driver = None
+
+class RandomPan(PanClass):
+    SampleRate = 2.56E6  # Sampling Frequency of the RTL-PanClass card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
     name = "Random"
     def __init__(self):
         pass
@@ -139,7 +177,7 @@ class RandSDR(SDR):
     def Close(self):
         self.driver = None
 
-class Mode(Device):
+class TransmissionMode(SubclassManager):
     # Signal types
     _changed = False
     _mode = None
@@ -167,17 +205,17 @@ class Mode(Device):
     def mode(cls):
         return cls._list[cls._index]
 
-class AM(Mode):
+class AM(TransmissionMode):
     @classmethod
     def freq(cls,radio_class):
         return radio_class.IF
         
-class USB(Mode):
+class USB(TransmissionMode):
     @classmethod
     def freq(cls,radio_class):
         return radio_class.IF-3000
         
-class LSB(Mode):
+class LSB(TransmissionMode):
     @classmethod
     def freq(cls,radio_class):
         return radio_class.IF+3000
@@ -186,8 +224,8 @@ class LSB(Mode):
 class appState:
     # holds program "state"
     refresh = 50 # default refresh timer in msec
-    def __init__( self, sdr_class=None, radio_class=None ):
-        self._sdr_class = sdr_class
+    def __init__( self, panadapter=None, radio_class=None ):
+        self._panadapter = panadapter
         self._radio_class = radio_class
         self._resetNeeded = False
         self._Loop = True # for initial entry into loop
@@ -195,6 +233,12 @@ class appState:
         self.refresh = type(self).refresh
         self._soapylist = {}
         self.discover = None
+        try:
+            import pyaudio
+            self.audio = pyaudio.PyAudio()
+        except:
+            print("Unable to use module pyaudio -- perhaps it's not installed?")
+            self.audio = None
 
     def Start(self,proc):
         self.timer.timeout.connect(proc)
@@ -230,14 +274,14 @@ class appState:
         self._radio_class = radio_class
 
     @property    
-    def sdr_class( self ):
-        return self._sdr_class
+    def panadapter( self ):
+        return self._panadapter
         
-    @sdr_class.setter
-    def sdr_class( self, sdr_class ):
-        if sdr_class != self._sdr_class:
+    @panadapter.setter
+    def panadapter( self, panadapter ):
+        if panadapter != self._panadapter:
             self._resetNeeded = True
-        self._sdr_class = sdr_class
+        self._panadapter = panadapter
         
     def SoapyAdd( self, address, port, name ):
         print("add",address,port,name)
@@ -250,11 +294,27 @@ class appState:
     @property
     def soapylist( self ):
         return self._soapylist
+        
+    @property
+    def audiolist(self):
+        alist = {}
+        if self.audio:
+            for i in range(self.audio.get_device_count()):
+                info = self.audio.get_device_info_by_index(i)
+                try:
+                    if info['maxInputChannels'] > 0:
+                        n = info['name']
+                        r = info['defaultSampleRate']
+                        alist[i] = (n,r)
+                except:
+                    pass
+        return alist
+                    
 
 #global
 AppState = appState()
 
-class PanAdapter():
+class ApplicationDisplay():
     # container class
     def __init__(self ):
         global AppState
@@ -262,32 +322,28 @@ class PanAdapter():
         self.radio_class = AppState.radio_class # The radio
         
         # configure device
-        self.sdr_class = AppState.sdr_class # the SDR panadapter
-        print(f'Starting PAN radio {self.radio_class.make} / {self.radio_class.model} sdr {self.sdr_class.name}\n')
+        self.panadapter = AppState.panadapter # the PanClass panadapter
+        print(f'Starting PAN radio {self.radio_class.make} / {self.radio_class.model} sdr {self.panadapter.name}\n')
         
         # open sdr (or at least try
-        try:
-            self.sdr = self.sdr_class()
-        except:
-            print(f'Could not open sdr {self.sdr_class.name} -- switch to random\n')
-            AppState.sdr_class = RandSDR
-            self.sdr_class = AppState.sdr_class
-            print(f'Starting PAN radio {self.radio_class.make} / {self.radio_class.model} sdr {self.sdr_class.name}\n')
-            self.sdr = self.sdr_class()
             
         self.changef( self.radio_class.IF )
-        self.widget = SpectrogramWidget(self.sdr)
+        self.widget = SpectrogramWidget()
                 
     def read(self):
-        if Mode.changed():
-            self.changef(Mode.mode().freq(self.radio_class))
-        self.widget.read_collected.emit(self.sdr.Read(self.widget.N_AVG*self.widget.N_FFT))
+        global AppState
+        if TransmissionMode.changed():
+            self.changef(TransmissionMode.mode().freq(self.radio_class))
+        print(AppState.panadapter.name)
+        self.widget.read_collected.emit(AppState.panadapter.Read(self.widget.N_AVG*self.widget.N_FFT))
 
     def changef(self, F_SDR):
-        self.sdr.SetFrequency( F_SDR )
+        global AppState
+        AppState.panadapter.SetFrequency( F_SDR )
     
     def close(self):
-        self.sdr.Close()
+        global AppState
+        AppState.panadapter.Close()
         
     def Loop(self, y_n ):
         global AppState
@@ -334,12 +390,9 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
     #define a custom signal
     read_collected = QtCore.pyqtSignal(np.ndarray)
 
-    def __init__(self,sdr):
+    def __init__(self):
         super(SpectrogramWidget, self).__init__()
         
-        global AppState
-        self.sdr = sdr
-
         self.N_FFT = 2048 # FFT bins
         self.N_WIN = 1024  # How many pixels to show from the FFT (around the center)
         self.N_AVG = Initial_N_AVG
@@ -360,6 +413,8 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.show()
 
     def makeWaterfall( self, panel ):
+        global AppState
+        
         self.waterfall = pg.ImageItem()
         panel.addItem(self.waterfall)
         c=QtGui.QCursor()
@@ -391,7 +446,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.waterfall.setLevels([self.minlev, self.maxlev])
 
         # setup the correct scaling for x-axis
-        bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)/1.e6/self.fft_ratio
+        bw_hz = AppState.panadapter.SampleRate/float(self.N_FFT) * float(self.N_WIN)/1.e6/self.fft_ratio
         self.waterfall.scale(bw_hz,1)
 #        self.setLabel('bottom', 'Frequency', units='kHz')
         
@@ -411,6 +466,12 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         if AppState.resetNeeded:
             self.Loop(True)
 
+    def setRandom( self ):
+        global AppState
+        AppState.panadapter = RandomPan()
+        if AppState.resetNeeded:
+            self.Loop(True)
+
     def makeMenu( self ):
         global AppState
         menu = self.menuBar()
@@ -426,13 +487,8 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         filemenu.addAction(m)
 
         panmenu = menu.addMenu('&Panadapter')
-        if AppState.discover:
-            for ((address,port),name) in AppState.soapylist.items():
-                print("Pan",name)
-                m = QtWidgets.QAction('{}\t\t{} : {}'.format(name,address,port),self)
-                m.triggered.connect(lambda state,a=address,p=port,n=name: self.setsdr(a,p,n))
-                panmenu.addAction(m)
-
+        self.makePanMenu(panmenu)
+        
         radiomenu = menu.addMenu('&Radio')
 
         make_dict = {}
@@ -447,8 +503,61 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         viewmenu = menu.addMenu('&View')
         Panels.addMenus( viewmenu, self )
 
-    def setsdr( self, address, port, name):
-        print("setsdr",address,port,name)
+    def makePanMenu( self, menu ):
+        global AppState
+
+        menu.clear()
+        
+        m = QtWidgets.QAction('&Rescan sources',self)
+        m.triggered.connect(lambda state,m=menu: self.makePanMenu(m))
+        menu.addAction(m)
+        
+        menu.addSeparator()
+        
+        if AppState.discover:
+            menu.addAction(QtWidgets.QAction('Remote via SoapySDR',self))
+            for ((address,port),name) in AppState.soapylist.items():
+                print("Pan",name)
+                m = QtWidgets.QAction('{}\t\t{} : {}'.format(name,address,port),self)
+                m.triggered.connect(lambda state,a=address,p=port,n=name: self.setsoapy(a,p,n))
+                menu.addAction(m)
+            menu.addSeparator()
+            
+        if AppState.audio:
+            menu.addAction(QtWidgets.QAction('Local audio sources',self))
+            for (index,(name,rate)) in AppState.audiolist.items():
+                print("Pan",name)
+                m = QtWidgets.QAction('{}. {}\t{}'.format(index,name,rate),self)
+                m.triggered.connect(lambda state,i=index: self.setaudio(i))
+                menu.addAction(m)
+            menu.addSeparator()
+
+        if True:
+            m = QtWidgets.QAction('Random',self)
+            m.triggered.connect(self.setrandom)
+            menu.addAction(m)
+            menu.addSeparator()
+
+            
+        m = QtWidgets.QAction('&Manual',self)
+        m.triggered.connect(lambda state,m=menu: self.makePanMenu(m))
+        menu.addAction(m)
+        
+    
+    def setrandom( self ):
+        global AppState
+        AppState.panadapter = RandomPan()
+        if AppState.resetNeeded:
+            self.Loop(True)
+
+    def setsoapy( self, address, port, name):
+        print("setsoapy",address,port,name)
+
+    def setaudio( self, index ):
+        global AppState
+        AppState.panadapter = AudioPan(index)
+        if AppState.resetNeeded:
+            self.Loop(True)
 
     def makeSpectrum( self, panel ):
         self.spectrum_plot = panel.plot()
@@ -487,7 +596,7 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.zoomoutbutton = QtWidgets.QPushButton("ZOOM OUT")
         self.avg_increase_button = QtWidgets.QPushButton("AVG +")
         self.avg_decrease_button = QtWidgets.QPushButton("AVG -")
-        self.modechange = QtWidgets.QPushButton(Mode.mode().__name__)
+        self.modechange = QtWidgets.QPushButton(TransmissionMode.mode().__name__)
         self.invertscroll = QtWidgets.QPushButton("Scroll")
         self.autolevel = QtWidgets.QPushButton("Auto Levels")
 
@@ -531,8 +640,8 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
 
 
     def on_modechange_clicked(self):
-        Mode.next()
-        self.modechange.setText(Mode.mode().__name__)
+        TransmissionMode.next()
+        self.modechange.setText(TransmissionMode.mode().__name__)
 
     def on_autolevel_clicked(self):
         tmp_array = np.copy(self.img_array[self.img_array>0])
@@ -563,9 +672,10 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         #self.waterfall.scale(2.0,1)
  
     def zoomfft(self, x, ratio = 1):
+        global AppState
         f_demod = 1.
-        t_total = (1/self.sdr.SampleRate) * self.N_FFT * self.N_AVG
-        t = np.arange(0, t_total, 1 / self.sdr.SampleRate)
+        t_total = (1/AppState.panadapter.SampleRate) * self.N_FFT * self.N_AVG
+        t = np.arange(0, t_total, 1 / AppState.panadapter.SampleRate)
         lo = 2**.5 * np.exp(-2j*np.pi*f_demod * t) # local oscillator
         x_mix = x*lo
         
@@ -576,13 +686,14 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         return x_mix 
 
     def update(self, chunk):
-        bw_hz = self.sdr.SampleRate/float(self.N_FFT) * float(self.N_WIN)
+        global AppState
+        bw_hz = AppState.panadapter.SampleRate/float(self.N_FFT) * float(self.N_WIN)
         self.win.setWindowTitle('PEPYSCOPE - IS0KYB - N_FFT: %d, BW: %.1f kHz' % (self.N_FFT, bw_hz/1000./self.fft_ratio))
 
         if self.fft_ratio>1:
             chunk = self.zoomfft(chunk, self.fft_ratio)
 
-        sample_freq, spec = welch(chunk, self.sdr.SampleRate, window="hamming", nperseg=self.N_FFT,  nfft=self.N_FFT)
+        sample_freq, spec = welch(chunk, AppState.panadapter.SampleRate, window="hamming", nperseg=self.N_FFT,  nfft=self.N_FFT)
         spec = np.roll(spec, self.N_FFT//2, 0)[self.N_FFT//2-self.N_WIN//2:self.N_FFT//2+self.N_WIN//2]
         
         # get magnitude 
@@ -720,6 +831,7 @@ class Discoverer(QtCore.QObject):
 
     @QtCore.pyqtSlot(QtDBus.QDBusMessage)
     def onItemNew(self, msg):
+        global AppState
         print('Avahi service discovered: {}'.format(msg.arguments()))
         flags = QtCore.QVariant(0)
         flags.convert(QtCore.QVariant.UInt)
@@ -732,11 +844,15 @@ class Discoverer(QtCore.QObject):
                 flags
             ]
         ).arguments()
-        print('\tAvahi service resolved: {}'.format(resolved))
-        AppState.SoapyAdd( resolved[7],resolved[8],resolved[2] )
+        try:
+            print('\tAvahi service resolved: {}'.format(resolved))
+            AppState.SoapyAdd( resolved[7],resolved[8],resolved[2] )
+        except:
+            print("Incomplete entry -- ignored")
 
     @QtCore.pyqtSlot(QtDBus.QDBusMessage)
     def onItemRemove(self, msg):
+        global AppState
         arguments = msg.arguments()
         print('Avahi service removed: {}'.format(arguments))
         AppState.SoapyDel( resolved[7],resolved[8] )
@@ -747,18 +863,26 @@ class Discoverer(QtCore.QObject):
 
 def CommandLine():
     """Setup argparser object to process the command line"""
-    cl = argparse.ArgumentParser(description="PyPanadapter - radio panadapter using an SDR dongle on the IF (intermediate frequency of a radio by Paul H Alfille based on code of Marco Cogoni")
-    cl.add_argument("-s","--sdr",help="SDR model",choices=[c.__name__ for c in SDR.List()],nargs='?',default=SDR.List()[0].__name__)
+    cl = argparse.ArgumentParser(description="PyPanadapter - radio panadapter using an PanClass dongle on the IF (intermediate frequency of a radio by Paul H Alfille based on code of Marco Cogoni")
+    cl.add_argument("-s","--sdr",help="PanClass model",choices=[c.__name__ for c in PanClass.List()],nargs='?',default=PanClass.List()[0].__name__)
     cl.add_argument("-r","--radio",help="Radio model",choices=[r.__name__ for r in Radio.List()],nargs='?',default=Radio.List()[0].__name__)
     cl.add_argument("-i","--if",help="Intermediate frequency -- overwrites radio default",type=float)
     return cl.parse_args()
 
 def main(args):
+    global AppState
     args = CommandLine() # Get args from command line
 
-    Mode.next() # prime mode list
+    TransmissionMode.next() # prime mode list
 
-    AppState.sdr_class = SDR.Match( args.sdr )
+    sdr_class = PanClass.Match( args.sdr )
+    # open sdr (or at least try
+    try:
+        AppState.panadapter = sdr_class()
+    except:
+        print(f'Could not open sdr {sdr_class.name} -- switch to random\n')
+        AppState.panadapter = RandomPan()
+
     AppState.radio_class = Radio.Match( args.radio )
     
     while AppState.Loop:
@@ -769,8 +893,8 @@ def main(args):
             except:
                 AppState.discover = None
         print("AppState.discover",AppState.discover)
-        pan = PanAdapter()
-        AppState.Start(pan.read)
+        display = ApplicationDisplay()
+        AppState.Start(display.read)
         app.exec_()
         AppState.Stop()
         app = None
