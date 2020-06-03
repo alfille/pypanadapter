@@ -23,6 +23,34 @@ from PyQt5 import QtCore, QtWidgets, QtGui, QtDBus
 import sys
 import argparse # for parsing the command line
 
+try:
+    import pyaudio
+    Flag_audio = True
+except:
+    print("Could not find pyaudio module -- try <pip3 install pyaudio>")
+    Flag_audio = False
+    
+try:
+    import random
+    Flag_random = True
+except:
+    print("Could not find random module -- try <pip3 install random>")
+    Flag_random = False
+    
+try:
+    import rtlsdr
+    Flag_rtlsdr = True
+except:
+    print("Could not find RTLSDR module -- try <pip3 install rtlsdr>")
+    Flag_rtlsdr = False
+    
+try:
+    import SoapySDR
+    Flag_soapy = True
+except:
+    print("Could not find SoapySDR module -- see https://github.com/pothosware/SoapySDR/wiki/PythonSupport")
+    Flag_soapy = False
+    
 #FS = 2.4e6 # Sampling Frequency of the RTL-PanClass card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
 Initial_N_AVG = 128 # averaging over how many spectra
 
@@ -81,17 +109,15 @@ class PanClass(SubclassManager):
 
 class RTLSDR(PanClass):
     SampleRate = 2.56E6  # Sampling Frequency of the RTL-PanClass card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
-    name = "RTL-PanClass"
+    name = "RTLSDR"
     def __init__(self,serial=None,index=None,host=None,port=12345):
+        if not Flag_rtlsdr:
+            raise ValueError
         self.serial = serial
         self.index = index
         self.host = host
         self.port = port
-        try:
-            import rtlsdr
-        except:
-            print("RTLSDR module not available -- try pip3 install pyrtlsdr")
-            raise
+
         try:
             if self.serial:
                 self.driver = RtlSdr(serial_number = self.serial)
@@ -134,10 +160,11 @@ class AudioPan(PanClass):
                 info = AppState.audio.get_device_info_by_index( index)
                 self.name = info['name']
                 type(self).name = self.name
-                self.SampleRate = info['maxSampleRate']
+                self.SampleRate = info['defaultSampleRate']
                 type(self).SampleRate = self.SampleRate
                 self.driver = AppState.audio.open(format=pyaudio.paFloat32, channels=1, rate=int(self.SampleRate), input=True, output=False, input_device_index = index )
             except:
+                print("Could not open audio device")
                 self.driver = None
         self.index = index
         
@@ -148,14 +175,11 @@ class AudioPan(PanClass):
         if self.driver:
             # I only
             try:
-                s =self.driver.read(2*size)
-                print(s)
-                n = np.fromstring( s )
-                print(n)
-                return n
-#                return np.fromstring( self.driver.read(size), 'float32' )
+                return np.fromstring( self.driver.read(size), 'float32' )
             except:
-                return np.zeros( (2*size,), 'float32' )
+                pass
+        return np.zeros( (size,), 'float32' )+.000000000001
+        
         
     def Close(self):
         if self.driver:
@@ -166,13 +190,29 @@ class RandomPan(PanClass):
     SampleRate = 2.56E6  # Sampling Frequency of the RTL-PanClass card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
     name = "Random"
     def __init__(self):
-        pass
+        if not Flag_random:
+            raise ValueError
         
     def SetFrequency(self, IF ):
         pass
         
     def Read(self,size):
         return 2*(np.random.random(int(size))+np.random.random(int(size))*1j)-(1.+1.j)
+        
+    def Close(self):
+        self.driver = None
+
+class ConstgantPan(PanClass):
+    SampleRate = 2.56E6  # Sampling Frequency of the RTL-PanClass card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+    name = "Constant"
+    def __init__(self):
+        pass
+        
+    def SetFrequency(self, IF ):
+        pass
+        
+    def Read(self,size):
+        return 2*(np.zeroes(int(size)))+.5
         
     def Close(self):
         self.driver = None
@@ -233,11 +273,9 @@ class appState:
         self.refresh = type(self).refresh
         self._soapylist = {}
         self.discover = None
-        try:
-            import pyaudio
+        if Flag_audio:
             self.audio = pyaudio.PyAudio()
-        except:
-            print("Unable to use module pyaudio -- perhaps it's not installed?")
+        else:
             self.audio = None
 
     def Start(self,proc):
@@ -284,11 +322,11 @@ class appState:
         self._panadapter = panadapter
         
     def SoapyAdd( self, address, port, name ):
-        print("add",address,port,name)
+        #print("add",address,port,name)
         self._soapylist[(address,port)] = name
         
     def SoapyDel( self, address, port ):
-        print("del",address,port,name)
+        #print("del",address,port,name)
         del self._soapylist[(address,port)]
         
     @property
@@ -333,7 +371,6 @@ class ApplicationDisplay():
         global AppState
         if TransmissionMode.changed():
             self.changef(TransmissionMode.mode().freq(self.radio_class))
-        print(AppState.panadapter.name)
         self.widget.read_collected.emit(AppState.panadapter.Read(self.widget.N_AVG*self.widget.N_FFT))
 
     def changef(self, F_SDR):
@@ -519,27 +556,32 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         if AppState.discover:
             menu.addAction(QtWidgets.QAction('Remote via SoapySDR',self))
             for ((address,port),name) in AppState.soapylist.items():
-                print("Pan",name)
+                #print("Pan",name)
                 m = QtWidgets.QAction('{}\t\t{} : {}'.format(name,address,port),self)
                 m.triggered.connect(lambda state,a=address,p=port,n=name: self.setsoapy(a,p,n))
                 menu.addAction(m)
             menu.addSeparator()
             
-        if AppState.audio:
+        if Flag_audio:
             menu.addAction(QtWidgets.QAction('Local audio sources',self))
             for (index,(name,rate)) in AppState.audiolist.items():
-                print("Pan",name)
+                #print("Pan",name)
                 m = QtWidgets.QAction('{}. {}\t{}'.format(index,name,rate),self)
                 m.triggered.connect(lambda state,i=index: self.setaudio(i))
                 menu.addAction(m)
             menu.addSeparator()
 
-        if True:
+        if Flag_random:
             m = QtWidgets.QAction('Random',self)
             m.triggered.connect(self.setrandom)
             menu.addAction(m)
             menu.addSeparator()
 
+        if True:
+            m = QtWidgets.QAction('True',self)
+            m.triggered.connect(self.setrandom)
+            menu.addAction(m)
+            menu.addSeparator()
             
         m = QtWidgets.QAction('&Manual',self)
         m.triggered.connect(lambda state,m=menu: self.makePanMenu(m))
@@ -827,14 +869,14 @@ class Discoverer(QtCore.QObject):
         )
         
     def __delete__(self):
-        print("Delete Discoverer")
+        #print("Delete Discoverer")
         self.server = None
         self.bus = None
 
     @QtCore.pyqtSlot(QtDBus.QDBusMessage)
     def onItemNew(self, msg):
         global AppState
-        print('Avahi service discovered: {}'.format(msg.arguments()))
+        #print('Avahi service discovered: {}'.format(msg.arguments()))
         flags = QtCore.QVariant(0)
         flags.convert(QtCore.QVariant.UInt)
         resolved = self.server.callWithArgumentList(
@@ -847,26 +889,28 @@ class Discoverer(QtCore.QObject):
             ]
         ).arguments()
         try:
-            print('\tAvahi service resolved: {}'.format(resolved))
+            #print('\tAvahi service resolved: {}'.format(resolved))
             AppState.SoapyAdd( resolved[7],resolved[8],resolved[2] )
         except:
-            print("Incomplete entry -- ignored")
+            #print("Incomplete entry -- ignored")
+            pass
 
     @QtCore.pyqtSlot(QtDBus.QDBusMessage)
     def onItemRemove(self, msg):
         global AppState
         arguments = msg.arguments()
-        print('Avahi service removed: {}'.format(arguments))
+        #print('Avahi service removed: {}'.format(arguments))
         AppState.SoapyDel( resolved[7],resolved[8] )
 
     @QtCore.pyqtSlot(QtDBus.QDBusMessage)
     def onAllForNow(self, msg):
-        print('Avahi emitted all signals for discovered peers')
+        #print('Avahi emitted all signals for discovered peers')
+        pass
 
 def CommandLine():
     """Setup argparser object to process the command line"""
     cl = argparse.ArgumentParser(description="PyPanadapter - radio panadapter using an PanClass dongle on the IF (intermediate frequency of a radio by Paul H Alfille based on code of Marco Cogoni")
-    cl.add_argument("-s","--sdr",help="PanClass model",choices=[c.__name__ for c in PanClass.List()],nargs='?',default=PanClass.List()[0].__name__)
+    cl.add_argument("-s","--sdr",help="Panadapter model",choices=[c.__name__ for c in PanClass.List()],nargs='?',default=PanClass.List()[0].__name__)
     cl.add_argument("-r","--radio",help="Radio model",choices=[r.__name__ for r in Radio.List()],nargs='?',default=Radio.List()[0].__name__)
     cl.add_argument("-i","--if",help="Intermediate frequency -- overwrites radio default",type=float)
     return cl.parse_args()
@@ -882,8 +926,11 @@ def main(args):
     try:
         AppState.panadapter = sdr_class()
     except:
-        print(f'Could not open sdr {sdr_class.name} -- switch to random\n')
-        AppState.panadapter = RandomPan()
+        print(f'Could not open panadapter {sdr_class.name} -- switch to random\n')
+        if Flag_random:
+            AppState.panadapter = RandomPan()
+        else:
+            AppState.panadapter = ConstantPan()
 
     AppState.radio_class = Radio.Match( args.radio )
     
@@ -894,7 +941,7 @@ def main(args):
                 AppState.discover = Discoverer(app, '_soapy._tcp')
             except:
                 AppState.discover = None
-        print("AppState.discover",AppState.discover)
+#        print("AppState.discover",AppState.discover)
         display = ApplicationDisplay()
         AppState.Start(display.read)
         app.exec_()
