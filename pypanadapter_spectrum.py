@@ -352,8 +352,11 @@ class appState:
 #global
 AppState = appState()
 
-class ApplicationDisplay():
-    # container class
+class ApplicationDisplay(QtWidgets.QMainWindow):
+    # Display class
+    #define a custom signal
+    read_collected = QtCore.pyqtSignal(np.ndarray)
+
     def __init__(self ):
         # Comes in with Panadapter set and readio_class set.
         global AppState
@@ -365,72 +368,8 @@ class ApplicationDisplay():
         print(f'Starting PAN radio {self.radio_class.make} / {self.radio_class.model} sdr {self.panadapter.name}\n')
         
         self.changef( self.radio_class.IF )
-        self.widget = SpectrogramWidget()
-                
-    def read(self):
-        global AppState
-        if TransmissionMode.changed():
-            self.changef(TransmissionMode.mode().freq(self.radio_class))
-        self.widget.read_collected.emit(AppState.panadapter.Read(self.widget.N_AVG*self.widget.N_FFT))
 
-    def changef(self, F_SDR):
-        global AppState
-        AppState.panadapter.SetFrequency( F_SDR )
-    
-    def close(self):
-        global AppState
-        AppState.panadapter.Close()
-        
-    def Loop(self, y_n ):
-        global AppState
-        AppState.Loop=y_n
-        self.qApp.quit()
-
-class Panels():
-    # manage the displaypanels -- waterfall and spectrogram so far
-    # some complicated logic for menu system to never allow no panels, and disable the menu entry that might allow it, to be clearer.
-    # actually can handle an arbitrary number of panels
-    List = []
-    def __init__(self, name, func, split):
-        self.name = name
-        self.plot = pg.PlotWidget()
-        func(self.plot)
-        split.addWidget(self.plot)
-        self.visible = True
-        type(self).List.append( self )
-
-    @classmethod
-    def clear( cls ):
-        cls.List.clear()
-    
-    @classmethod
-    def addMenus( cls, menu, master ):
-        for p in cls.List:
-            v = QtWidgets.QAction(p.name,master,checkable=True,checked=p.visible)
-            v.triggered.connect(p.toggle)
-            p.menu = v
-            menu.addAction(v)
-
-    def toggle( self ):
-        if self.visible:
-            self.plot.setVisible( False )
-            self.visible = False
-            v = [ p for p in type(self).List if p.visible ]
-            if len(v) == 1:
-                v[0].menu.setDisabled( True )        
-        else:
-            self.plot.setVisible( True )
-            self.visible = True
-            for p in type(self).List:
-                p.menu.setDisabled( False )
-        
-class SpectrogramWidget(QtWidgets.QMainWindow):
-    # Display class
-    #define a custom signal
-    read_collected = QtCore.pyqtSignal(np.ndarray)
-
-    def __init__(self):
-        super(SpectrogramWidget, self).__init__()
+        super(ApplicationDisplay, self).__init__()
         
         self.N_FFT = 2048 # FFT bins
         self.N_WIN = 1024  # How many pixels to show from the FFT (around the center)
@@ -450,6 +389,25 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         self.read_collected.connect(self.update)
 
         self.show()
+                
+    def read(self):
+        global AppState
+        if TransmissionMode.changed():
+            self.changef(TransmissionMode.mode().freq(self.radio_class))
+        self.read_collected.emit(AppState.panadapter.Read(self.N_AVG*self.N_FFT))
+
+    def changef(self, F_SDR):
+        global AppState
+        AppState.panadapter.SetFrequency( F_SDR )
+    
+    def close(self):
+        global AppState
+        AppState.panadapter.Close()
+        
+    def Loop(self, y_n ):
+        global AppState
+        AppState.Loop=y_n
+        self.qApp.quit()
 
     def makeWaterfall( self, panel ):
         global AppState
@@ -784,6 +742,45 @@ class SpectrogramWidget(QtWidgets.QMainWindow):
         global AppState
         AppState.Loop=y_n
         QtWidgets.qApp.quit()
+
+class Panels():
+    # manage the displaypanels -- waterfall and spectrogram so far
+    # some complicated logic for menu system to never allow no panels, and disable the menu entry that might allow it, to be clearer.
+    # actually can handle an arbitrary number of panels
+    List = []
+    def __init__(self, name, func, split):
+        self.name = name
+        self.plot = pg.PlotWidget()
+        func(self.plot)
+        split.addWidget(self.plot)
+        self.visible = True
+        type(self).List.append( self )
+
+    @classmethod
+    def clear( cls ):
+        cls.List.clear()
+    
+    @classmethod
+    def addMenus( cls, menu, master ):
+        for p in cls.List:
+            v = QtWidgets.QAction(p.name,master,checkable=True,checked=p.visible)
+            v.triggered.connect(p.toggle)
+            p.menu = v
+            menu.addAction(v)
+
+    def toggle( self ):
+        if self.visible:
+            self.plot.setVisible( False )
+            self.visible = False
+            v = [ p for p in type(self).List if p.visible ]
+            if len(v) == 1:
+                v[0].menu.setDisabled( True )        
+        else:
+            self.plot.setVisible( True )
+            self.visible = True
+            for p in type(self).List:
+                p.menu.setDisabled( False )
+        
 
 # from https://gist.github.com/fladi/8bebdba4c47051afa7cad46e3ead6763 Michael Fladischer
 # from https://gist.github.com/fladi/8bebdba4c47051afa7cad46e3ead6763 Michael Fladischer
