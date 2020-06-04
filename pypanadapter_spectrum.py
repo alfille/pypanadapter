@@ -104,6 +104,10 @@ class PanClass(SubclassManager):
     def __init(self):
         self.driver = None
         
+    @property
+    def N_AVG(self):
+        return int(self.SampleRate / 2048 / 10 )
+        
     def Close(self):
         self.driver = None
 
@@ -112,11 +116,13 @@ class RTLSDR(PanClass):
     name = "RTLSDR"
     def __init__(self,serial=None,index=None,host=None,port=12345):
         if not Flag_rtlsdr:
+            self.driver = None
             raise ValueError
         self.serial = serial
         self.index = index
         self.host = host
         self.port = port
+        self.SampleRate = type(self).SampleRate
 
         try:
             if self.serial:
@@ -129,8 +135,13 @@ class RTLSDR(PanClass):
                 self.driver = RtlSdr()
         except:
             print("RTLSDR not found")
+            self.driver = None
             raise
         self.driver.sample_rate = self.SampleRate
+        
+    def __del__(self):
+        if self.driver:
+            self.driver.close()
         
     def SetFrequency(self, IF ):
         if IF < 30.E6 :
@@ -155,6 +166,9 @@ class AudioPan(PanClass):
     name = "Audio"
     def __init__(self,index):
         global AppState
+        if not Flag_audio:
+            self.driver = None
+            raise ValueError
         if AppState.audio:
             try:
                 info = AppState.audio.get_device_info_by_index( index)
@@ -167,6 +181,10 @@ class AudioPan(PanClass):
                 print("Could not open audio device")
                 self.driver = None
         self.index = index
+        
+    def __del__(self):
+        if self.driver:
+            self.driver.close()
         
     def SetFrequency(self, IF ):
         self.center_freq = IF
@@ -263,27 +281,17 @@ class LSB(TransmissionMode):
  
 class appState:
     # holds program "state"
-    refresh = 50 # default refresh timer in msec
     def __init__( self, panadapter=None, radio_class=None ):
         self._panadapter = panadapter
         self._radio_class = radio_class
         self._resetNeeded = False
         self._Loop = True # for initial entry into loop
-        self.timer = QtCore.QTimer() #default
-        self.refresh = type(self).refresh
         self._soapylist = {}
         self.discover = None
         if Flag_audio:
             self.audio = pyaudio.PyAudio()
         else:
             self.audio = None
-
-    def Start(self,proc):
-        self.timer.timeout.connect(proc)
-        self.timer.start(self.refresh)
-        
-    def Stop(self):
-        self.timer.stop()
 
     @property
     def Loop(self):
@@ -357,6 +365,8 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
     #define a custom signal
     read_collected = QtCore.pyqtSignal(np.ndarray)
 
+    refresh = 50 # default refresh timer in msec
+
     def __init__(self ):
         # Comes in with Panadapter set and readio_class set.
         global AppState
@@ -373,7 +383,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         
         self.N_FFT = 2048 # FFT bins
         self.N_WIN = 1024  # How many pixels to show from the FFT (around the center)
-        self.N_AVG = Initial_N_AVG
+        self.N_AVG = AppState.panadapter.N_AVG
         self.fft_ratio = 2.
 
         self.init_ui()
@@ -388,7 +398,14 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
 
         self.read_collected.connect(self.update)
 
+        # Show window
         self.show()
+        
+        # Start timer for data collection
+        self.timer = QtCore.QTimer() #default
+        self.refresh = type(self).refresh
+        self.timer.timeout.connect(self.read)
+        self.timer.start(self.refresh)
                 
     def read(self):
         global AppState
@@ -940,9 +957,7 @@ def main(args):
                 AppState.discover = None
 #        print("AppState.discover",AppState.discover)
         display = ApplicationDisplay()
-        AppState.Start(display.read)
         app.exec_()
-        AppState.Stop()
         app = None
 
 if __name__ == '__main__':
