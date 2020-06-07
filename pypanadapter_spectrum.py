@@ -21,6 +21,7 @@ from scipy.signal import welch, decimate
 import pyqtgraph as pg
 from PyQt5 import QtCore, QtWidgets, QtGui, QtDBus
 import sys
+import signal
 import argparse # for parsing the command line
 
 try:
@@ -51,14 +52,13 @@ except:
     print("Could not find SoapySDR module -- see https://github.com/pothosware/SoapySDR/wiki/PythonSupport")
     Flag_soapy = False
     
-#FS = 2.4e6 # Sampling Frequency of the RTL-PanClass card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
-Initial_N_AVG = 128 # averaging over how many spectra
+FFT_SIZE = 2048
 
 class SubclassManager():
     # base class that gives subclass list and matching
     @classmethod
     def List(cls): # List of types
-        return [c for c in cls.__subclasses__()]
+        return [ c for c in cls.__subclasses__() ]
             
     @classmethod
     def Match(cls,name): # List of types
@@ -66,7 +66,7 @@ class SubclassManager():
         for c in cl:
             if name == c.__name__:
                 return c
-        return cl[0]
+        return None
 
 class Radio(SubclassManager):
     # device being pan-adapterd. Have make / model / intermediate frequency
@@ -106,13 +106,53 @@ class PanClass(SubclassManager):
         
     @property
     def N_AVG(self):
-        return int(self.SampleRate / 2048 / 10 )
+        return int(self.SampleRate / FFT_SIZE / 10 )
+        
+    def Close(self):
+        self.driver = None
+        
+    def __del__(self):
+        print("Closing ",self.name)
+        self.Close()
+        
+    @property
+    def Mode( self ):
+        # Stream or Block
+        return type(self).Mode
+
+class PanStreamClass(PanClass):
+    # All PanAdapters that stream Data
+    name = "None"
+    Mode = 'Stream'
+
+    def __init(self):
+        super().__init__()
+        
+    def Stream( self, update_function , chunk_size ) :
+        self.update_function = update_function
+        self.chunk_size = chunk_size
+        self.StartStream()
+
+    def CallBack( self, data ):
+        # returns data to the Application Display
+        self.update_function( data )
+                
+    def Close(self):
+        self.driver = None
+
+class PanBlockClass(PanClass):
+    # All PanAdapters that stream Data
+    name = "None"
+    Mode = 'Block'
+
+    def __init(self):
+        super().__init__()
         
     def Close(self):
         self.driver = None
 
-class RTLSDR(PanClass):
-    SampleRate = 2.56E6  # Sampling Frequency of the RTL-PanClass card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+class RTLSDR(PanBlockClass):
+    SampleRate = 2.56E6  # Sampling Frequency of the RTLSDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
     name = "RTLSDR"
     def __init__(self,serial=None,index=None,host=None,port=12345):
         if not Flag_rtlsdr:
@@ -161,7 +201,7 @@ class RTLSDR(PanClass):
             self.driver.close()
         self.driver = None
 
-class AudioPan(PanClass):
+class AudioPan(PanStreamClass):
     SampleRate = 44100.0
     name = "Audio"
     def __init__(self,index):
@@ -170,17 +210,37 @@ class AudioPan(PanClass):
             self.driver = None
             raise ValueError
         if AppState.audio:
+            self.driver = None
             try:
                 info = AppState.audio.get_device_info_by_index( index)
                 self.name = info['name']
                 type(self).name = self.name
                 self.SampleRate = info['defaultSampleRate']
                 type(self).SampleRate = self.SampleRate
-                self.driver = AppState.audio.open(format=pyaudio.paFloat32, channels=1, rate=int(self.SampleRate), input=True, output=False, input_device_index = index )
             except:
                 print("Could not open audio device")
-                self.driver = None
         self.index = index
+    
+    def Stream( self, update_function , chunk_size ) :
+        try:
+            self.driver = AppState.audio.open( \
+                format=pyaudio.paFloat32, \
+                channels=1, \
+                frames_per_buffer=chunk_size, \
+                rate=int(self.SampleRate), \
+                input=True, \
+                output=False, \
+                stream_callback = self.audio_callback, \
+                input_device_index = self.index \
+                )
+        except:
+            self.driver = None
+            print("Could not start audio streaming")
+        super().Stream( update_function, chunk_size )
+
+    def StartStream( self ) :
+        if self.driver:
+            self.driver.start_stream()
         
     def __del__(self):
         if self.driver:
@@ -189,11 +249,20 @@ class AudioPan(PanClass):
     def SetFrequency(self, IF ):
         self.center_freq = IF
         
+    def audio_callback( self, in_data, frame_count, time_info, status_flags ):
+        r = np.fromstring( in_data, 'float32' )
+        print( max(r), min(r) )
+        self.CallBack( r ) 
+        return (None, pyaudio.paContinue)
+
     def Read(self,size):
         if self.driver:
             # I only
             try:
-                return np.fromstring( self.driver.read(size), 'float32' )
+#                return np.fromstring( self.driver.read(size), 'float32' )
+                r = np.fromstring( self.driver.read(size), 'float32' )
+                print( max(r), min(r) )
+                return r
             except:
                 pass
         return np.zeros( (size,), 'float32' )+.000000000001
@@ -204,8 +273,8 @@ class AudioPan(PanClass):
             self.driver.close()
         self.driver = None
 
-class RandomPan(PanClass):
-    SampleRate = 2.56E6  # Sampling Frequency of the RTL-PanClass card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+class RandomPan(PanBlockClass):
+    SampleRate = 2.56E6
     name = "Random"
     def __init__(self):
         if not Flag_random:
@@ -220,8 +289,8 @@ class RandomPan(PanClass):
     def Close(self):
         self.driver = None
 
-class ConstgantPan(PanClass):
-    SampleRate = 2.56E6  # Sampling Frequency of the RTL-PanClass card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+class ConstantPan(PanBlockClass):
+    SampleRate = 2.56E6 
     name = "Constant"
     def __init__(self):
         pass
@@ -381,7 +450,6 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
 
         super(ApplicationDisplay, self).__init__()
         
-        self.N_FFT = 2048 # FFT bins
         self.N_WIN = 1024  # How many pixels to show from the FFT (around the center)
         self.N_AVG = AppState.panadapter.N_AVG
         self.fft_ratio = 2.
@@ -401,17 +469,30 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         # Show window
         self.show()
         
-        # Start timer for data collection
-        self.timer = QtCore.QTimer() #default
-        self.refresh = type(self).refresh
-        self.timer.timeout.connect(self.read)
-        self.timer.start(self.refresh)
+        if AppState.panadapter.Mode == 'Block':
+            # Start timer for data collection
+            self.timer = QtCore.QTimer() #default
+            self.refresh = type(self).refresh
+            self.timer.timeout.connect(self.read)
+            self.timer.start(self.refresh)
+        else:
+            # Stream
+            AppState.panadapter.Stream( self.read_callback, self.N_AVG*FFT_SIZE )
                 
     def read(self):
         global AppState
+        # Block mode only
         if TransmissionMode.changed():
             self.changef(TransmissionMode.mode().freq(self.radio_class))
-        self.read_collected.emit(AppState.panadapter.Read(self.N_AVG*self.N_FFT))
+        self.read_collected.emit(AppState.panadapter.Read(self.N_AVG*FFT_SIZE))
+            
+    def read_callback(self,chunk):
+        global AppState
+        # Stream mode only
+        if TransmissionMode.changed():
+            self.changef(TransmissionMode.mode().freq(self.radio_class))
+        self.update( chunk )
+            
 
     def changef(self, F_SDR):
         global AppState
@@ -460,7 +541,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         self.waterfall.setLevels([self.minlev, self.maxlev])
 
         # setup the correct scaling for x-axis
-        bw_hz = AppState.panadapter.SampleRate/float(self.N_FFT) * float(self.N_WIN)/1.e6/self.fft_ratio
+        bw_hz = AppState.panadapter.SampleRate/float(FFT_SIZE) * float(self.N_WIN)/1.e6/self.fft_ratio
         self.waterfall.scale(bw_hz,1)
 #        self.setLabel('bottom', 'Frequency', units='kHz')
         
@@ -650,12 +731,10 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
     def on_avg_increase_clicked(self):
         if self.N_AVG<512:
             self.N_AVG *= 2
-        print( self.N_AVG )
 
     def on_avg_decrease_clicked(self):
         if self.N_AVG>1:
             self.N_AVG /= 2
-        print( self.N_AVG )
 
 
     def on_modechange_clicked(self):
@@ -693,7 +772,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
     def zoomfft(self, x, ratio = 1):
         global AppState
         f_demod = 1.
-        t_total = (1/AppState.panadapter.SampleRate) * self.N_FFT * self.N_AVG
+        t_total = (1/AppState.panadapter.SampleRate) * FFT_SIZE * self.N_AVG
         t = np.arange(0, t_total, 1 / AppState.panadapter.SampleRate)
         lo = 2**.5 * np.exp(-2j*np.pi*f_demod * t) # local oscillator
         x_mix = x*lo
@@ -706,14 +785,14 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
 
     def update(self, chunk):
         global AppState
-        bw_hz = AppState.panadapter.SampleRate/float(self.N_FFT) * float(self.N_WIN)
-        self.win.setWindowTitle('PEPYSCOPE - IS0KYB - N_FFT: %d, BW: %.1f kHz' % (self.N_FFT, bw_hz/1000./self.fft_ratio))
+        bw_hz = AppState.panadapter.SampleRate/float(FFT_SIZE) * float(self.N_WIN)
+        self.win.setWindowTitle('PEPYSCOPE - IS0KYB - N_FFT: %d, BW: %.1f kHz' % (FFT_SIZE, bw_hz/1000./self.fft_ratio))
 
         if self.fft_ratio>1:
             chunk = self.zoomfft(chunk, self.fft_ratio)
 
-        sample_freq, spec = welch(chunk, AppState.panadapter.SampleRate, window="hamming", nperseg=self.N_FFT,  nfft=self.N_FFT)
-        spec = np.roll(spec, self.N_FFT//2, 0)[self.N_FFT//2-self.N_WIN//2:self.N_FFT//2+self.N_WIN//2]
+        sample_freq, spec = welch(chunk, AppState.panadapter.SampleRate, window="hamming", nperseg=FFT_SIZE,  nfft=FFT_SIZE)
+        spec = np.roll(spec, FFT_SIZE//2, 0)[FFT_SIZE//2-self.N_WIN//2:FFT_SIZE//2+self.N_WIN//2]
         
         # get magnitude 
         psd = abs(spec)
@@ -924,7 +1003,7 @@ class Discoverer(QtCore.QObject):
 def CommandLine():
     """Setup argparser object to process the command line"""
     cl = argparse.ArgumentParser(description="PyPanadapter - radio panadapter using an PanClass dongle on the IF (intermediate frequency of a radio by Paul H Alfille based on code of Marco Cogoni")
-    cl.add_argument("-s","--sdr",help="Panadapter model",choices=[c.__name__ for c in PanClass.List()],nargs='?',default=PanClass.List()[0].__name__)
+    cl.add_argument("-s","--sdr",help="Panadapter model",choices=[c.__name__ for c in PanBlockClass.List()+PanStreamClass.List()],nargs='?',default="RTLSDR")
     cl.add_argument("-r","--radio",help="Radio model",choices=[r.__name__ for r in Radio.List()],nargs='?',default=Radio.List()[0].__name__)
     cl.add_argument("-i","--if",help="Intermediate frequency -- overwrites radio default",type=float)
     return cl.parse_args()
@@ -932,10 +1011,15 @@ def CommandLine():
 def main(args):
     global AppState
     args = CommandLine() # Get args from command line
+    print("PanClassList",[p.name for p in PanBlockClass.List()+PanStreamClass.List()])
 
     TransmissionMode.next() # prime mode list
 
-    sdr_class = PanClass.Match( args.sdr )
+    sdr_class = PanBlockClass.Match( args.sdr )
+    if not sdr_class:
+        sdr_class = PanStreamClass.Match( args.sdr )
+    if not sdr_class:
+        sdr_class = ConstantPan
     # open sdr (or at least try
     try:
         AppState.panadapter = sdr_class()
@@ -960,5 +1044,13 @@ def main(args):
         app.exec_()
         app = None
 
+def signal_handler( signal, frame ):
+    # Signal handler
+    # signal.signal( signal.SIGINT, signal.SIG_IGN )
+    sys.exit(0)
+
 if __name__ == '__main__':
+    # Set up keyboard interrupt handler
+    signal.signal(signal.SIGINT, signal_handler )
+    # Start program
     sys.exit(main(sys.argv))
