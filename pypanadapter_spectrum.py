@@ -53,16 +53,33 @@ except:
     Flag_soapy = False
     
 FFT_SIZE = 2048
+FRAME_RATE = 10 # data refesh rate in Hz
 
 class SubclassManager():
     # base class that gives subclass list and matching
     @classmethod
-    def List(cls): # List of types
-        return [ c for c in cls.__subclasses__() ]
+    def List(cls,level=1): # List of types
+        if level==-1:
+            # only end-subclasses (might be awkward if empty leaves)
+            s = cls.List(1)
+            if s==[]:
+                # no subclasses level
+                return cls.List(0)
+            # recurse to lower level
+            return sum([c.List(-1) for c in s],[])
+        elif level==0:
+            # This level
+            return [cls]
+        elif level==1:
+            # All direct subclasses -- default option
+            return [ c for c in cls.__subclasses__() ]
+        else:
+            # Recursive level of subclases
+            return sum([s.List(level-1) for s in cls.List(1)],[]) 
             
     @classmethod
-    def Match(cls,name): # List of types
-        cl = cls.List()
+    def Match(cls,name,level=1): # List of types
+        cl = cls.List(level)
         for c in cl:
             if name == c.__name__:
                 return c
@@ -100,13 +117,21 @@ class Custom(Radio):
 
 class PanClass(SubclassManager):
     # Pan adapter device including RTLSDR
-    name = "None"
+    _name = "Panadapter"
     def __init(self):
         self.driver = None
         
     @property
     def N_AVG(self):
-        return int(self.SampleRate / FFT_SIZE / 10 )
+        return int(self.SampleRate / FFT_SIZE / FRAME_RATE )
+        
+    @property
+    def name( self ):
+        return getattr(self,'_name', type(self)._name )
+
+    @name.setter
+    def name( self, name ):
+        self._name = name
         
     def Close(self):
         self.driver = None
@@ -137,9 +162,6 @@ class PanStreamClass(PanClass):
         # returns data to the Application Display
         self.update_function( data )
                 
-    def Close(self):
-        self.driver = None
-
 class PanBlockClass(PanClass):
     # All PanAdapters that stream Data
     name = "None"
@@ -148,12 +170,11 @@ class PanBlockClass(PanClass):
     def __init(self):
         super().__init__()
         
-    def Close(self):
-        self.driver = None
-
 class RTLSDR(PanBlockClass):
     SampleRate = 2.56E6  # Sampling Frequency of the RTLSDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
-    name = "RTLSDR"
+    _name = "RTLSDR"
+    _name = "RTLSDR"
+    _name = "RTLSDR"
     def __init__(self,serial=None,index=None,host=None,port=12345):
         if not Flag_rtlsdr:
             self.driver = None
@@ -203,7 +224,7 @@ class RTLSDR(PanBlockClass):
 
 class AudioPan(PanStreamClass):
     SampleRate = 44100.0
-    name = "Audio"
+    _name = "Audio"
     def __init__(self,index):
         global AppState
         if not Flag_audio:
@@ -213,29 +234,27 @@ class AudioPan(PanStreamClass):
             self.driver = None
             try:
                 info = AppState.audio.get_device_info_by_index( index)
-                self.name = info['name']
-                type(self).name = self.name
+                self._name = info['name']
                 self.SampleRate = info['defaultSampleRate']
-                type(self).SampleRate = self.SampleRate
             except:
                 print("Could not open audio device")
         self.index = index
     
     def Stream( self, update_function , chunk_size ) :
         try:
-            self.driver = AppState.audio.open( \
-                format=pyaudio.paFloat32, \
-                channels=1, \
-                frames_per_buffer=chunk_size, \
-                rate=int(self.SampleRate), \
-                input=True, \
-                output=False, \
-                stream_callback = self.audio_callback, \
-                input_device_index = self.index \
+            self.driver = AppState.audio.open(
+                format=pyaudio.paFloat32,
+                channels=1,
+                frames_per_buffer=chunk_size,
+                rate=int(self.SampleRate),
+                input=True,
+                output=False,
+                stream_callback = self.audio_callback,
+                input_device_index = self.index
                 )
         except:
             self.driver = None
-            print("Could not start audio streaming")
+            print(self.name,"Could not start audio streaming")
         super().Stream( update_function, chunk_size )
 
     def StartStream( self ) :
@@ -275,7 +294,7 @@ class AudioPan(PanStreamClass):
 
 class RandomPan(PanBlockClass):
     SampleRate = 2.56E6
-    name = "Random"
+    _name = "Random"
     def __init__(self):
         if not Flag_random:
             raise ValueError
@@ -291,7 +310,7 @@ class RandomPan(PanBlockClass):
 
 class ConstantPan(PanBlockClass):
     SampleRate = 2.56E6 
-    name = "Constant"
+    _name = "Constant"
     def __init__(self):
         pass
         
@@ -402,9 +421,9 @@ class appState:
         #print("add",address,port,name)
         self._soapylist[(address,port)] = name
         
-    def SoapyDel( self, address, port ):
-        #print("del",address,port,name)
-        del self._soapylist[(address,port)]
+    def SoapyDel( self, name ):
+        #print("soapydel",name)
+        self._soapylist = {k:v for k,v in self._soapylist.items() if v != name }
         
     @property
     def soapylist( self ):
@@ -991,9 +1010,7 @@ class Discoverer(QtCore.QObject):
     @QtCore.pyqtSlot(QtDBus.QDBusMessage)
     def onItemRemove(self, msg):
         global AppState
-        arguments = msg.arguments()
-        #print('Avahi service removed: {}'.format(arguments))
-        AppState.SoapyDel( resolved[7],resolved[8] )
+        AppState.SoapyDel( msg.arguments()[2] )
 
     @QtCore.pyqtSlot(QtDBus.QDBusMessage)
     def onAllForNow(self, msg):
@@ -1003,7 +1020,7 @@ class Discoverer(QtCore.QObject):
 def CommandLine():
     """Setup argparser object to process the command line"""
     cl = argparse.ArgumentParser(description="PyPanadapter - radio panadapter using an PanClass dongle on the IF (intermediate frequency of a radio by Paul H Alfille based on code of Marco Cogoni")
-    cl.add_argument("-s","--sdr",help="Panadapter model",choices=[c.__name__ for c in PanBlockClass.List()+PanStreamClass.List()],nargs='?',default="RTLSDR")
+    cl.add_argument("-s","--sdr",help="Panadapter model",choices=[c.__name__ for c in PanClass.List(2)],nargs='?',default="RTLSDR")
     cl.add_argument("-r","--radio",help="Radio model",choices=[r.__name__ for r in Radio.List()],nargs='?',default=Radio.List()[0].__name__)
     cl.add_argument("-i","--if",help="Intermediate frequency -- overwrites radio default",type=float)
     return cl.parse_args()
@@ -1011,13 +1028,10 @@ def CommandLine():
 def main(args):
     global AppState
     args = CommandLine() # Get args from command line
-    print("PanClassList",[p.name for p in PanBlockClass.List()+PanStreamClass.List()])
 
     TransmissionMode.next() # prime mode list
 
-    sdr_class = PanBlockClass.Match( args.sdr )
-    if not sdr_class:
-        sdr_class = PanStreamClass.Match( args.sdr )
+    sdr_class = PanClass.Match( args.sdr, 2 )
     if not sdr_class:
         sdr_class = ConstantPan
     # open sdr (or at least try
@@ -1029,6 +1043,7 @@ def main(args):
             AppState.panadapter = RandomPan()
         else:
             AppState.panadapter = ConstantPan()
+        print(AppState.panadapter.name)
 
     AppState.radio_class = Radio.Match( args.radio )
     
@@ -1042,6 +1057,7 @@ def main(args):
 #        print("AppState.discover",AppState.discover)
         display = ApplicationDisplay()
         app.exec_()
+        display = None
         app = None
 
 def signal_handler( signal, frame ):
