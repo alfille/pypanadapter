@@ -28,29 +28,36 @@ try:
     import pyaudio
     Flag_audio = True
 except:
-    print("Could not find pyaudio module -- try <pip3 install pyaudio>")
+    print("Could not find pyaudio module\n\trun <pip3 install pyaudio>")
     Flag_audio = False
     
 try:
     import random
     Flag_random = True
 except:
-    print("Could not find random module -- try <pip3 install random>")
+    print("Could not find random module\n\trun <pip3 install random>")
     Flag_random = False
     
 try:
     import rtlsdr
     Flag_rtlsdr = True
 except:
-    print("Could not find RTLSDR module -- try <pip3 install rtlsdr>")
+    print("Could not find RTLSDR module\n\trun <pip3 install rtlsdr>")
     Flag_rtlsdr = False
     
 try:
     import SoapySDR
     Flag_soapy = True
 except:
-    print("Could not find SoapySDR module -- see https://github.com/pothosware/SoapySDR/wiki/PythonSupport")
+    print("Could not find SoapySDR module\n\tsee https://github.com/pothosware/SoapySDR/wiki/PythonSupport")
     Flag_soapy = False
+    
+try:
+    import usb.core
+    Flag_USB = True
+except:
+    print("Could not find pyusb module\n\trun <pip3 pyusb>\n\tsee https://github.com/pyusb/pyusb")
+    Flag_USB = False
     
 FFT_SIZE = 2048
 FRAME_RATE = 8 # data refesh rate in Hz
@@ -147,7 +154,7 @@ class PanClass(SubclassManager):
 
 class PanStreamClass(PanClass):
     # All PanAdapters that stream Data
-    name = "None"
+    _name = "None"
     Mode = 'Stream'
 
     def __init(self):
@@ -164,7 +171,7 @@ class PanStreamClass(PanClass):
                 
 class PanBlockClass(PanClass):
     # All PanAdapters that stream Data
-    name = "None"
+    _name = "None"
     Mode = 'Block'
 
     def __init(self):
@@ -186,12 +193,16 @@ class RTLSDR(PanBlockClass):
         try:
             if self.serial:
                 self.driver = RtlSdr(serial_number = self.serial)
+                self._name = f'RTLSDR serial {serial}'
             elif self.index:
                 self.driver = RtlSdr(self.index)
+                self._name = f'RTLSDR index {serial}'
             elif self.host:
                 self.driver = RtlSdrTcpClient( hostname=self.host, port=self.port ) 
+                self._name = f'RTLSDR @{host}:{port}'
             else:
                 self.driver = RtlSdr()
+                self_name = 'RTLSDR'
         except:
             print("RTLSDR not found")
             self.driver = None
@@ -460,7 +471,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         
         # configure device
         self.panadapter = AppState.panadapter # the PanClass panadapter
-        print(f'Starting PAN radio {self.radio_class.make} / {self.radio_class.model} sdr {self.panadapter.name}\n')
+        print(f'Starting PAN radio {self.radio_class.make} {self.radio_class.model}\nPanadapter {self.panadapter.name}\n')
         
         self.changef( self.radio_class.IF )
 
@@ -623,35 +634,45 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         m.triggered.connect(lambda state,m=menu: self.makePanMenu(m))
         menu.addAction(m)
         
-        menu.addSeparator()
         
         if AppState.discover:
-            menu.addAction(QtWidgets.QAction('Remote via SoapySDR',self))
+            network = menu.addMenu("&Network devices")
             for ((address,port),name) in AppState.soapylist.items():
                 #print("Pan",name)
                 m = QtWidgets.QAction('{}\t\t{} : {}'.format(name,address,port),self)
-                m.triggered.connect(lambda state,a=address,p=port,n=name: self.setsoapy(a,p,n))
-                menu.addAction(m)
-            menu.addSeparator()
+                m.triggered.connect(lambda state,a=address,p=port,n=name: self.setSoapy(a,p,n))
+                network.addAction(m)
             
         if Flag_audio:
-            menu.addAction(QtWidgets.QAction('Local audio sources',self))
+            audio = menu.addMenu("&Audio devices")
             for (index,(name,rate)) in AppState.audiolist.items():
                 #print("Pan",name)
                 m = QtWidgets.QAction('{}. {}\t{}'.format(index,name,rate),self)
-                m.triggered.connect(lambda state,i=index: self.setaudio(i))
+                m.triggered.connect(lambda state,i=index: self.setAudio(i))
+                audio.addAction(m)
+
+        if Flag_USB:
+            dev = list(usb.core.find( find_all = True, idVendor = 0x0bda, idProduct = 0x2838 ))
+            if len(dev) < 2:
+                m = QtWidgets.QAction('RTLSDR',self)
+                m.triggered.connect( lambda state,index=0: self.setRtlsdr(index) )
                 menu.addAction(m)
-            menu.addSeparator()
+            else:
+                rtl = menu.addMenu('&RTLSDR devices')
+                for d in range(len(dev)):
+                    m = QtWidgets.QAction('{}. {}\t{}',format(d,dev[d].iProduct,dev[d].iSerial),self)
+                    m.triggered.connect(lambda state,index=d: self.setRtlsdr(index) )
+                    rtl.addAction(m) 
 
         if Flag_random:
             m = QtWidgets.QAction('Random',self)
-            m.triggered.connect(self.setrandom)
+            m.triggered.connect(self.setRandom)
             menu.addAction(m)
             menu.addSeparator()
 
         if True:
             m = QtWidgets.QAction('True',self)
-            m.triggered.connect(self.setrandom)
+            m.triggered.connect(self.setRandom)
             menu.addAction(m)
             menu.addSeparator()
             
@@ -660,16 +681,27 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         menu.addAction(m)
         
     
-    def setrandom( self ):
+    def setRandom( self ):
         global AppState
         AppState.panadapter = RandomPan()
         if AppState.resetNeeded:
             self.Loop(True)
 
-    def setsoapy( self, address, port, name):
-        print("setsoapy",address,port,name)
+    def setSoapy( self, address, port, name):
+        print("setSoapy",address,port,name)
 
-    def setaudio( self, index ):
+    def setRtlsdr( self, index ):
+        global AppState
+        print("RTLSDR index=",index)
+        try:
+            newpan = RTLSDR(index=index)
+            AppState.panadapter = newpan
+        except:
+            pass
+        if AppState.resetNeeded:
+            self.Loop(True)
+
+    def setAudio( self, index ):
         global AppState
         AppState.panadapter = AudioPan(index)
         if AppState.resetNeeded:
@@ -1038,7 +1070,7 @@ def main(args):
     try:
         AppState.panadapter = sdr_class()
     except:
-        print(f'Could not open panadapter {sdr_class.name} -- switch to random\n')
+        print('Could not open panadapter {} -- switch to random'.format(sdr_class._name))
         if Flag_random:
             AppState.panadapter = RandomPan()
         else:
