@@ -53,7 +53,7 @@ except:
     Flag_soapy = False
     
 FFT_SIZE = 2048
-FRAME_RATE = 10 # data refesh rate in Hz
+FRAME_RATE = 8 # data refesh rate in Hz
 
 class SubclassManager():
     # base class that gives subclass list and matching
@@ -137,7 +137,7 @@ class PanClass(SubclassManager):
         self.driver = None
         
     def __del__(self):
-        print("Closing ",self.name)
+        print("Closing ",self._name)
         self.Close()
         
     @property
@@ -153,14 +153,14 @@ class PanStreamClass(PanClass):
     def __init(self):
         super().__init__()
         
-    def Stream( self, update_function , chunk_size ) :
-        self.update_function = update_function
+    def Stream( self, update_signal , chunk_size ) :
+        self.update_signal = update_signal
         self.chunk_size = chunk_size
         self.StartStream()
 
-    def CallBack( self, data ):
-        # returns data to the Application Display
-        self.update_function( data )
+    def emitter( self, data ):
+        # sends data to Application Display
+        self.update_signal.emit( data )
                 
 class PanBlockClass(PanClass):
     # All PanAdapters that stream Data
@@ -172,8 +172,6 @@ class PanBlockClass(PanClass):
         
 class RTLSDR(PanBlockClass):
     SampleRate = 2.56E6  # Sampling Frequency of the RTLSDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
-    _name = "RTLSDR"
-    _name = "RTLSDR"
     _name = "RTLSDR"
     def __init__(self,serial=None,index=None,host=None,port=12345):
         if not Flag_rtlsdr:
@@ -269,9 +267,7 @@ class AudioPan(PanStreamClass):
         self.center_freq = IF
         
     def audio_callback( self, in_data, frame_count, time_info, status_flags ):
-        r = np.fromstring( in_data, 'float32' )
-        print( max(r), min(r) )
-        self.CallBack( r ) 
+        self.emitter( np.frombuffer( in_data, 'float32' ) ) 
         return (None, pyaudio.paContinue)
 
     def Read(self,size):
@@ -452,6 +448,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
     # Display class
     #define a custom signal
     read_collected = QtCore.pyqtSignal(np.ndarray)
+    read_streamed = QtCore.pyqtSignal(np.ndarray)
 
     refresh = 50 # default refresh timer in msec
 
@@ -484,6 +481,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         self.makeMenu()
 
         self.read_collected.connect(self.update)
+        self.read_streamed.connect(self.read_callback)
 
         # Show window
         self.show()
@@ -496,7 +494,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             self.timer.start(self.refresh)
         else:
             # Stream
-            AppState.panadapter.Stream( self.read_callback, self.N_AVG*FFT_SIZE )
+            AppState.panadapter.Stream( self.read_streamed, self.N_AVG*FFT_SIZE )
                 
     def read(self):
         global AppState
@@ -506,7 +504,6 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         self.read_collected.emit(AppState.panadapter.Read(self.N_AVG*FFT_SIZE))
             
     def read_callback(self,chunk):
-        global AppState
         # Stream mode only
         if TransmissionMode.changed():
             self.changef(TransmissionMode.mode().freq(self.radio_class))
@@ -764,7 +761,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         tmp_array = np.copy(self.img_array[self.img_array>0])
         tmp_array = tmp_array[tmp_array<250]
         tmp_array = tmp_array[:]
-        print( tmp_array.shape )
+        #print( tmp_array.shape )
 
         self.minminlev = np.percentile(tmp_array, 99)
         self.minlev = np.percentile(tmp_array, 80)
@@ -772,7 +769,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         print( self.minlev, self.maxlev )
         self.waterfall.setLevels([self.minlev, self.maxlev])
 
-        self.panels[1].setYRange(-self.minminlev, -self.maxlev, padding=0.3)
+        self.s_pan.plot.setYRange(-self.minminlev, -self.maxlev, padding=0.3)
 
     def on_invertscroll_clicked(self):
         self.scroll *= -1
@@ -865,9 +862,9 @@ class Panels():
     List = []
     def __init__(self, name, func, split):
         self.name = name
-        self.plot = pg.PlotWidget()
-        func(self.plot)
-        split.addWidget(self.plot)
+        self._plot = pg.PlotWidget()
+        func(self._plot)
+        split.addWidget(self._plot)
         self.visible = True
         type(self).List.append( self )
 
@@ -885,17 +882,20 @@ class Panels():
 
     def toggle( self ):
         if self.visible:
-            self.plot.setVisible( False )
+            self._plot.setVisible( False )
             self.visible = False
             v = [ p for p in type(self).List if p.visible ]
             if len(v) == 1:
                 v[0].menu.setDisabled( True )        
         else:
-            self.plot.setVisible( True )
+            self._plot.setVisible( True )
             self.visible = True
             for p in type(self).List:
                 p.menu.setDisabled( False )
         
+    @property
+    def plot( self ):
+        return self._plot
 
 # from https://gist.github.com/fladi/8bebdba4c47051afa7cad46e3ead6763 Michael Fladischer
 # from https://gist.github.com/fladi/8bebdba4c47051afa7cad46e3ead6763 Michael Fladischer
@@ -1034,7 +1034,7 @@ def main(args):
     sdr_class = PanClass.Match( args.sdr, 2 )
     if not sdr_class:
         sdr_class = ConstantPan
-    # open sdr (or at least try
+    # open sdr (or at least try)
     try:
         AppState.panadapter = sdr_class()
     except:
