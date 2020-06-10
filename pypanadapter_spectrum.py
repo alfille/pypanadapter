@@ -11,18 +11,19 @@ This version does:
 5. Also upgraded to Qt5 and python3
 """
 
+# QT5 forced
+from PyQt5 import QtCore, QtWidgets, QtGui, QtDBus
 
-#from rtlsdr import *
+# standard libraries
 from time import sleep
 import math
-import random
-import numpy as np
-from scipy.signal import welch, decimate
-import pyqtgraph as pg
-from PyQt5 import QtCore, QtWidgets, QtGui, QtDBus
 import sys
 import signal
 import argparse # for parsing the command line
+
+from scipy.signal import welch, decimate
+import numpy as np
+import pyqtgraph as pg
 
 try:
     import pyaudio
@@ -384,7 +385,9 @@ class appState:
         self._soapylist = {}
         self.discover = None
         if Flag_audio:
+            sys.stderr.write("\n--------------------------------------------------------\n\tSetup output from PyAudio follows -- usually can be ignored\n")
             self.audio = pyaudio.PyAudio()
+            sys.stderr.write("\tEnd of PyAudio setup\n--------------------------------------------------------\n\n")
         else:
             self.audio = None
 
