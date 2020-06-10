@@ -145,7 +145,7 @@ class PanClass(SubclassManager):
         self.driver = None
         
     def __del__(self):
-        print("Closing ",self._name)
+        #print("Closing ",self._name)
         self.Close()
         
     @property
@@ -282,19 +282,6 @@ class AudioPan(PanStreamClass):
         self.emitter( np.frombuffer( in_data, 'float32' ) ) 
         return (None, pyaudio.paContinue)
 
-    def Read(self,size):
-        if self.driver:
-            # I only
-            try:
-#                return np.fromstring( self.driver.read(size), 'float32' )
-                r = np.fromstring( self.driver.read(size), 'float32' )
-                print( max(r), min(r) )
-                return r
-            except:
-                pass
-        return np.zeros( (size,), 'float32' )+.000000000001
-        
-        
     def Close(self):
         if self.driver:
             self.driver.close()
@@ -474,8 +461,6 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         
         # configure device
         self.panadapter = AppState.panadapter # the PanClass panadapter
-        print(f'Starting PAN radio {self.radio_class.make} {self.radio_class.model}\nPanadapter {self.panadapter.name}\n')
-        
         self.changef( self.radio_class.IF )
 
         super(ApplicationDisplay, self).__init__()
@@ -485,6 +470,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         self.fft_ratio = 2.
 
         self.init_ui()
+        self.StatusBarText.setText(f'Panadapter: <B>{self.panadapter.name}</B> Radio: <B>{self.radio_class.make} {self.radio_class.model}<\B>')
         self.qt_connections()
 
         pg.setConfigOptions(antialias=False)
@@ -691,11 +677,12 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             self.Loop(True)
 
     def setSoapy( self, address, port, name):
-        print("setSoapy",address,port,name)
+        #print("setSoapy",address,port,name)
+        pass
 
     def setRtlsdr( self, index ):
         global AppState
-        print("RTLSDR index=",index)
+        #print("RTLSDR index=",index)
         try:
             newpan = RTLSDR(index=index)
             AppState.panadapter = newpan
@@ -767,8 +754,10 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         self.setGeometry(10, 10, 1024, 512)
         self.setCentralWidget(self.win)
         
-        self.StatBar = QtWidgets.QStatusBar(self)
-        self.setStatusBar(self.StatBar)
+        self.StatusBarFrame = QtWidgets.QStatusBar(self)
+        self.setStatusBar(self.StatusBarFrame)
+        self.StatusBarText = QtWidgets.QLabel()
+        self.StatusBarFrame.addWidget(self.StatusBarText)
 
     def qt_connections(self):
         self.zoominbutton.clicked.connect(self.on_zoominbutton_clicked)
@@ -801,7 +790,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         self.minminlev = np.percentile(tmp_array, 99)
         self.minlev = np.percentile(tmp_array, 80)
         self.maxlev = np.percentile(tmp_array, 0.3)
-        print( self.minlev, self.maxlev )
+        #print( self.minlev, self.maxlev )
         self.waterfall.setLevels([self.minlev, self.maxlev])
 
         self.s_pan.plot.setYRange(-self.minminlev, -self.maxlev, padding=0.3)
@@ -992,7 +981,7 @@ class Discoverer(QtCore.QObject):
             domain,
             flags
         )
-        print('New ServiceBrowser: {}'.format(browser_path.arguments()))
+        #print('New ServiceBrowser: {}'.format(browser_path.arguments()))
         self.bus.connect(
             'org.freedesktop.Avahi',
             browser_path.arguments()[0],
@@ -1078,7 +1067,6 @@ def main(args):
             AppState.panadapter = RandomPan()
         else:
             AppState.panadapter = ConstantPan()
-        print(AppState.panadapter.name)
 
     AppState.radio_class = Radio.Match( args.radio )
     
@@ -1089,7 +1077,6 @@ def main(args):
                 AppState.discover = Discoverer(app, '_soapy._tcp')
             except:
                 AppState.discover = None
-#        print("AppState.discover",AppState.discover)
         display = ApplicationDisplay()
         app.exec_()
         display = None
