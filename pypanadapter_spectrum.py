@@ -362,7 +362,7 @@ class LSB(TransmissionMode):
         return radio_class.IF+3000
         
  
-class appState:
+class ProgramState:
     # holds program "state"
     def __init__( self, panadapter=None, radio_class=None ):
         self._panadapter = panadapter
@@ -425,7 +425,7 @@ class appState:
     @property
     def soapylist( self ):
         return self._soapylist
-        
+
     @property
     def audiolist(self):
         alist = {}
@@ -443,13 +443,14 @@ class appState:
                     
 
 #global
-AppState = appState()
+AppState = ProgramState()
 
 class ApplicationDisplay(QtWidgets.QMainWindow):
     # Display class
     #define a custom signal
     read_collected = QtCore.pyqtSignal(np.ndarray)
     read_streamed = QtCore.pyqtSignal(np.ndarray)
+    soapy_complete = QtCore.pyqtSignal()
 
     refresh = 50 # default refresh timer in msec
 
@@ -482,6 +483,9 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
 
         self.read_collected.connect(self.update)
         self.read_streamed.connect(self.read_callback)
+        self.soapy_complete.connect(self.remakePanMenu)
+        if AppState.discover:
+            AppState.discover.SoapyRegister(self.soapy_complete)
 
         # Show window
         self.show()
@@ -614,13 +618,18 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         viewmenu = menu.addMenu('&View')
         Panels.addMenus( viewmenu, self )
 
+    def remakePanMenu( self ):
+        self.panmenu.clear()
+        self.makePanMenu( self.panmenu )
+
+
     def makePanMenu( self, menu ):
         global AppState
 
-        menu.clear()
-        
+        self.panmenu = menu
+
         m = QtWidgets.QAction('&Rescan sources',self)
-        m.triggered.connect(lambda state,m=menu: self.makePanMenu(m))
+        m.triggered.connect(self.remakePanMenu)
         menu.addAction(m)
         
         
@@ -965,6 +974,7 @@ class Discoverer(QtCore.QObject):
         self.protocol = protocol
         self.bus = QtDBus.QDBusConnection.systemBus()
         self.bus.registerObject('/', self)
+        self.signal_complete = None 
         self.server = QtDBus.QDBusInterface(
             'org.freedesktop.Avahi',
             '/',
@@ -1025,21 +1035,27 @@ class Discoverer(QtCore.QObject):
             ]
         ).arguments()
         try:
-            #print('\tAvahi service resolved: {}'.format(resolved))
             AppState.SoapyAdd( resolved[7],resolved[8],resolved[2] )
+            if self.signal_complete:
+                self.signal_complete.emit()
         except:
-            #print("Incomplete entry -- ignored")
             pass
 
     @QtCore.pyqtSlot(QtDBus.QDBusMessage)
     def onItemRemove(self, msg):
         global AppState
         AppState.SoapyDel( msg.arguments()[2] )
+        if self.signal_complete:
+            self.signal_complete.emit()
+        
+    def SoapyRegister( self, signal_complete ):
+        self.signal_complete = signal_complete 
 
     @QtCore.pyqtSlot(QtDBus.QDBusMessage)
     def onAllForNow(self, msg):
         #print('Avahi emitted all signals for discovered peers')
-        pass
+        if self.signal_complete:
+            self.signal_complete.emit()
 
 def CommandLine():
     """Setup argparser object to process the command line"""
