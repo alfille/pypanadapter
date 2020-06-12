@@ -182,8 +182,8 @@ class RTLSDR(PanBlockClass):
     SampleRate = 2.56E6  # Sampling Frequency of the RTLSDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
     _name = "RTLSDR"
     def __init__(self,serial=None,index=None,host=None,port=12345):
+        self.driver = None
         if not Flag_rtlsdr:
-            self.driver = None
             raise ValueError
         self.serial = serial
         self.index = index
@@ -226,6 +226,69 @@ class RTLSDR(PanBlockClass):
     def Read(self,size):
         # IQ inversion to correct low-high frequencies
         return np.flip(self.driver.read_samples(size))
+        
+    def Close(self):
+        if self.driver:
+            self.driver.close()
+        self.driver = None
+
+class SoapyRemotePan(PanBlockClass):
+    SampleRate = 2.56E6  # Sampling Frequency of the RTLSDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+    _name = "SoapySDR remote"
+    def __init__(self, address, port, name ):
+        self.driver = None
+        print("Pan",address,port,name,Flag_soapy)
+        if not Flag_soapy:
+            print("No Soapy")
+            raise ValueError
+
+        self.address = address
+        self.port = port
+        self._name = name
+        self.SampleRate = type(self).SampleRate
+        self._size = 0 # size of buffer
+
+        args = {}
+        args['driver'] = 'remote'
+        if ':' in address:
+            # IPV6
+            args['remote'] = "[" + address + "]:" + str(port)
+        else:
+            # IPV4
+            args['remote'] = address + ":" + str(port)
+
+        print("About to try ",name,args)
+        try:
+            self.driver = SoapySDR.Device(args)
+        except:
+            print("SoapyRemote not found for ",name)
+            self.driver = None
+            raise
+
+        #query device info
+        print(self.driver.listAntennas('ant ',SoapySDR.SOAPY_SDR_RX, 0))
+        print(self.driver.listGains('gain ',SoapySDR.SOAPY_SDR_RX, 0))
+        freqs = self.driver.getFrequencyRange(SoapySDR.SOAPY_SDR_RX, 0)
+        for freqRange in freqs: print('freq ',freqRange)
+        
+        #setup a stream (complex floats)
+        self.rxStream = self.driver.setupStream(SoapySDR.SOAPY_SDR_RX, SoapySDR.SOAPY_SDR_CF32)
+        self.driver.activateStream(self.rxStream) #start streaming
+
+        
+    def __del__(self):
+        if self.driver:
+            self.driver.close()
+        
+    def SetFrequency(self, IF ):
+        self.driver.setFrequency(SoapySDR.SOAPY_SDR_RX, 0, IF)
+        
+    def Read(self,size):
+        if size != self_size:
+            self._size = size
+            self.buf = numpy.array([0]*size, numpy.complex64) 
+        sr = self.driver.readStream(self.rxStream, [self.buf], size)
+        return self.buf
         
     def Close(self):
         if self.driver:
@@ -284,7 +347,9 @@ class AudioPan(PanStreamClass):
 
     def Close(self):
         if self.driver:
-            self.driver.close()
+            #shutdown the stream
+            self.driver.deactivateStream(self.rxStream) #stop streaming
+            self.driver.closeStream(self.rxStream)
         self.driver = None
 
 class RandomPan(PanBlockClass):
@@ -520,7 +585,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
     
     def close(self):
         global AppState
-        AppState.panadapter.Close()
+        #AppState.panadapter.Close()
         
     def Loop(self, y_n ):
         global AppState
@@ -686,8 +751,12 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             self.Loop(True)
 
     def setSoapy( self, address, port, name):
-        #print("setSoapy",address,port,name)
-        pass
+        try: 
+            AppState.panadapter = SoapyRemotePan(address, port, name )
+            if AppState.resetNeeded:
+                self.Loop(True)
+        except:
+            pass
 
     def setRtlsdr( self, index ):
         global AppState
@@ -1053,7 +1122,6 @@ class Discoverer(QtCore.QObject):
 
     @QtCore.pyqtSlot(QtDBus.QDBusMessage)
     def onAllForNow(self, msg):
-        #print('Avahi emitted all signals for discovered peers')
         if self.signal_complete:
             self.signal_complete.emit()
 
