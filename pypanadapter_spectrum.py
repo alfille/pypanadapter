@@ -252,10 +252,10 @@ class SoapyRemotePan(PanBlockClass):
         args['driver'] = 'remote'
         if ':' in address:
             # IPV6
-            args['remote'] = "[" + address + "]:" + str(port)
+            args['remote'] = "tcp://" + "[" + address + "]:" + str(port)
         else:
             # IPV4
-            args['remote'] = address + ":" + str(port)
+            args['remote'] = "tcp://" + address + ":" + str(port)
 
         print("About to try ",name,args)
         try:
@@ -266,6 +266,7 @@ class SoapyRemotePan(PanBlockClass):
             raise
 
         #query device info
+        print("Driver loaded")
         print(self.driver.listAntennas('ant ',SoapySDR.SOAPY_SDR_RX, 0))
         print(self.driver.listGains('gain ',SoapySDR.SOAPY_SDR_RX, 0))
         freqs = self.driver.getFrequencyRange(SoapySDR.SOAPY_SDR_RX, 0)
@@ -378,7 +379,7 @@ class ConstantPan(PanBlockClass):
         pass
         
     def Read(self,size):
-        return 2*(np.zeroes(int(size)))+.5
+        return 2*(np.zeros(int(size)))+.5
         
     def Close(self):
         self.driver = None
@@ -734,19 +735,75 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             menu.addSeparator()
 
         if True:
-            m = QtWidgets.QAction('True',self)
-            m.triggered.connect(self.setRandom)
+            m = QtWidgets.QAction('Constant',self)
+            m.triggered.connect(self.setConstant)
             menu.addAction(m)
             menu.addSeparator()
             
-        m = QtWidgets.QAction('&Manual',self)
-        m.triggered.connect(lambda state,m=menu: self.makePanMenu(m))
-        menu.addAction(m)
-        
-    
-    def setRandom( self ):
+        if True:
+            m = QtWidgets.QAction('Manual Entry',self)
+            m.triggered.connect(self.setManual)
+            menu.addAction(m)
+            menu.addSeparator()
+            
+    def setManual( self ):
         global AppState
-        AppState.panadapter = RandomPan()
+        
+        # Enclosing Dialog
+        dlg = QtWidgets.QDialog( self )
+        dlg.setWindowTitle( "Manual Panadapter Entry" )
+        dlg.resize(300,300)
+        
+        # Local Tab
+        localtab = self.setManualLocal(dlg)
+        
+        # Network Tab
+        nettab = self.setManualNet(dlg)
+                
+        # Tabbing structure 
+        tab = QtWidgets.QTabWidget( dlg )
+        tab.addTab( nettab, "Network" )
+        tab.addTab( localtab, "Direct" )
+
+        dlg.exec()
+    
+    def setManualLocal(self,dlg):
+        # Local Tab
+        localtab = QtWidgets.QTabWidget()
+        lst = {} # Local Tab subtabs
+        for st in ['SoapySDR','USB','RTLSDR']:
+            lst[st] = QtWidgets.QWidget()
+            localtab.addTab(lst[st],st)
+        return localtab
+
+    def setManualNet(self,dlg):
+        # Network Tab
+        nettab = QtWidgets.QFrame()
+        nettablay = QtWidgets.QVBoxLayout()
+
+        #Entry fields
+        nettab1 = QtWidgets.QWidget()
+        nettab1 = QtWidgets.QGroupBox("Network Address Entry")
+        layout = QtWidgets.QFormLayout()
+        layout.addRow(QtWidgets.QLabel("Host:"), QtWidgets.QLineEdit(inputMask='000.000.000.000'))
+        layout.addRow(QtWidgets.QLabel("Port:"), QtWidgets.QLineEdit(inputMask='00000;',text='55132'))
+        layout.addRow(QtWidgets.QLabel("Options:"), QtWidgets.QLineEdit())
+        nettab1.setLayout(layout)
+        nettablay.addWidget(nettab1)
+        
+        # Button fields
+        nettab2 = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        nettab2.accepted.connect(dlg.accept)
+        nettab2.rejected.connect(dlg.reject)
+        nettablay.addWidget(nettab2)
+
+        nettab.setLayout(nettablay)
+        return nettab
+
+
+    def setConstant( self ):
+        global AppState
+        AppState.panadapter = ConstantPan()
         if AppState.resetNeeded:
             self.Loop(True)
 
