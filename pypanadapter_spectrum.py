@@ -235,16 +235,23 @@ class RTLSDR(PanBlockClass):
 class SoapyRemotePan(PanBlockClass):
     SampleRate = 2.56E6  # Sampling Frequency of the RTLSDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
     _name = "SoapySDR remote"
-    def __init__(self, address, port, name ):
+    def __init__(self, dictionary ):
         self.driver = None
-        print("Pan",address,port,name,Flag_soapy)
+        #print("Pan",address,port,name,Flag_soapy)
         if not Flag_soapy:
             print("No Soapy")
             raise ValueError
 
-        self.address = address
-        self.port = port
-        self._name = name
+        required_keys = ['address','port','name']
+        # Check for essential arguments
+        for k in required_keys:
+            if k not in dictionary:
+                print('SoapySDR missing {} entry'.format(k))
+                raise ValueError
+
+        self.address = dictionary['address']
+        self.port = dictionary['port']
+        self._name = dictionary['name']
         self.SampleRate = type(self).SampleRate
         self._size = 0 # size of buffer
 
@@ -257,6 +264,10 @@ class SoapyRemotePan(PanBlockClass):
             # IPV4
             args['remote'] = "tcp://" + address + ":" + str(port)
 
+        for k in dictionary:
+            if k not in required_keys:
+                args[k] = dictionary[k]
+
         print("About to try ",name,args)
         try:
             self.driver = SoapySDR.Device(args)
@@ -264,6 +275,7 @@ class SoapyRemotePan(PanBlockClass):
             print("SoapyRemote not found for ",name)
             self.driver = None
             raise
+        
 
         #query device info
         print("Driver loaded")
@@ -514,9 +526,11 @@ AppState = ProgramState()
 class ApplicationDisplay(QtWidgets.QMainWindow):
     # Display class
     #define a custom signal
-    read_collected = QtCore.pyqtSignal(np.ndarray)
-    read_streamed = QtCore.pyqtSignal(np.ndarray)
-    soapy_complete = QtCore.pyqtSignal()
+    block_read_signal = QtCore.pyqtSignal(np.ndarray)
+    stream_read_signal = QtCore.pyqtSignal(np.ndarray)
+    soapy_list_signal = QtCore.pyqtSignal()
+    soapy_pan_signal = QtCore.pyqtSignal(dict)
+    rtl_pan_signal = QtCore.pyqtSignal(dict)
 
     refresh = 50 # default refresh timer in msec
 
@@ -547,11 +561,14 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         self.init_image()
         self.makeMenu()
 
-        self.read_collected.connect(self.update)
-        self.read_streamed.connect(self.read_callback)
-        self.soapy_complete.connect(self.remakePanMenu)
+        self.block_read_signal.connect(self.update)
+        self.stream_read_signal.connect(self.read_callback)
+        self.soapy_list_signal.connect(self.remakePanMenu)
+        self.soapy_pan_signal.connect(self.setSoapy)
+        self.rtl_pan_signal.connect(self.setRtlsdr)
+
         if AppState.discover:
-            AppState.discover.SoapyRegister(self.soapy_complete)
+            AppState.discover.SoapyRegister(self.soapy_list_signal)
 
         # Show window
         self.show()
@@ -564,14 +581,14 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             self.timer.start(self.refresh)
         else:
             # Stream
-            AppState.panadapter.Stream( self.read_streamed, self.N_AVG*FFT_SIZE )
+            AppState.panadapter.Stream( self.stream_read_signal, self.N_AVG*FFT_SIZE )
                 
     def read(self):
         global AppState
         # Block mode only
         if TransmissionMode.changed():
             self.changef(TransmissionMode.mode().freq(self.radio_class))
-        self.read_collected.emit(AppState.panadapter.Read(self.N_AVG*FFT_SIZE))
+        self.block_read_signal.emit(AppState.panadapter.Read(self.N_AVG*FFT_SIZE))
             
     def read_callback(self,chunk):
         # Stream mode only
@@ -704,7 +721,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             for ((address,port),name) in AppState.soapylist.items():
                 #print("Pan",name)
                 m = QtWidgets.QAction('{}\t\t{} : {}'.format(name,address,port),self)
-                m.triggered.connect(lambda state,a=address,p=port,n=name: self.setSoapy(a,p,n))
+                m.triggered.connect(lambda state,a=address,p=port,n=name: self.soapy_pan_signal.emit({'address':a,'port':str(p),'name':n}))
                 network.addAction(m)
             
         if Flag_audio:
@@ -719,13 +736,13 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             dev = list(usb.core.find( find_all = True, idVendor = 0x0bda, idProduct = 0x2838 ))
             if len(dev) < 2:
                 m = QtWidgets.QAction('RTLSDR',self)
-                m.triggered.connect( lambda state,index=0: self.setRtlsdr(index) )
+                m.triggered.connect( lambda state,index=0: self.rtl_pan_signal.emit(index) )
                 menu.addAction(m)
             else:
                 rtl = menu.addMenu('&RTLSDR devices')
                 for d in range(len(dev)):
                     m = QtWidgets.QAction('{}. {}\t{}',format(d,dev[d].iProduct,dev[d].iSerial),self)
-                    m.triggered.connect(lambda state,index=d: self.setRtlsdr(index) )
+                    m.triggered.connect(lambda state,index=d: self.rtl_pan_signal.emit(index) )
                     rtl.addAction(m) 
 
         if Flag_random:
@@ -742,7 +759,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             
         if True:
             m = QtWidgets.QAction('Manual Entry',self)
-            m.triggered.connect(self.setManual)
+            m.triggered.connect(lambda state, s=self: Manual(s).exec())
             menu.addAction(m)
             menu.addSeparator()
             
@@ -807,14 +824,17 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         if AppState.resetNeeded:
             self.Loop(True)
 
-    def setSoapy( self, address, port, name):
+    @QtCore.pyqtSlot(dict)
+    def setSoapy( self, dictionary):
+        print("Set Soapy",dictionary)
         try: 
-            AppState.panadapter = SoapyRemotePan(address, port, name )
+            AppState.panadapter = SoapyRemotePan(dictionary )
             if AppState.resetNeeded:
                 self.Loop(True)
         except:
             pass
 
+    @QtCore.pyqtSlot(int)
     def setRtlsdr( self, index ):
         global AppState
         #print("RTLSDR index=",index)
@@ -1055,6 +1075,83 @@ class Panels():
     @property
     def plot( self ):
         return self._plot
+
+class Manual(QtWidgets.QDialog):
+    def __init__(self, caller):
+        global AppState
+        
+        super(Manual,self).__init__(caller)
+        
+        self.caller = caller
+        
+        # Enclosing Dialog
+        self.setWindowTitle( "Manual Panadapter Entry" )
+        self.resize(300,300)
+        
+        # Local Tab
+        localtab = self.setManualLocal()
+        
+        # Network Tab
+        nettab = self.setManualNet()
+                
+        # Tabbing structure 
+        tab = QtWidgets.QTabWidget(self)
+        tab.addTab( nettab, "Network" )
+        tab.addTab( localtab, "Direct" )
+            
+    def setManualLocal(self):
+        # Local Tab
+        localtab = QtWidgets.QTabWidget()
+        lst = {} # Local Tab subtabs
+        for st in ['SoapySDR','USB','RTLSDR']:
+            lst[st] = QtWidgets.QWidget()
+            localtab.addTab(lst[st],st)
+        return localtab
+
+    def setManualNet(self):
+        # Network Tab
+        nettab = QtWidgets.QFrame()
+        nettablay = QtWidgets.QVBoxLayout()
+
+        #Entry fields
+        nettab1 = QtWidgets.QWidget()
+        nettab1 = QtWidgets.QGroupBox("Network Address Entry")
+        layout = QtWidgets.QFormLayout()
+        
+        name=QtWidgets.QLineEdit('SoapyRemote')
+        layout.addRow(QtWidgets.QLabel("Name:"), name)
+
+        address=QtWidgets.QLineEdit(inputMask='000.000.000.000')
+        layout.addRow(QtWidgets.QLabel("Host:"), address)
+        
+        port=QtWidgets.QLineEdit(inputMask='00000;',text='55132')
+        layout.addRow(QtWidgets.QLabel("Port:"), port)
+        
+        option = QtWidgets.QLineEdit(inputMask='annnnnnnnnnnnn=xxxxxxxxxxxxxxxxxxxxxxxxxx')
+        layout.addRow(QtWidgets.QLabel("Options:"), option)
+        
+        nettab1.setLayout(layout)
+        nettablay.addWidget(nettab1)
+        
+        # Button fields
+        nettab2 = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        nettab2.accepted.connect(lambda a=address.text(), p=port.text(), n=name.text(), o=option.text(): self.network(a,p,n,o))
+        nettab2.rejected.connect(self.reject)
+        nettablay.addWidget(nettab2)
+
+        nettab.setLayout(nettablay)
+        return nettab
+        
+    def network( self, a, p, n, o ):
+        arg={'address':a,'port':str(p),'name':n}
+        try:
+            oo = o.split('=',1)
+            if oo[0] != '':
+                arg[oo[0]]=oo[1]
+        except:
+            pass
+        self.caller.soapy_pan_signal.emit(arg)
+        self.close()
 
 # from https://gist.github.com/fladi/8bebdba4c47051afa7cad46e3ead6763 Michael Fladischer
 # from https://gist.github.com/fladi/8bebdba4c47051afa7cad46e3ead6763 Michael Fladischer
