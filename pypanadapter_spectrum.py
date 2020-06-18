@@ -1099,9 +1099,9 @@ class Manual(QtWidgets.QDialog):
         tab.addTab( nettab, "Network" )
         tab.addTab( localtab, "Direct" )
 
-    def _toggle_local( self, name, driver, extra ):
-        self.option.setText(extra+'=')
-        print(self.option,extra+'=')
+    def _toggle_local( self, name, driver, extra, option ):
+        option.setText(extra+'=')
+        option.setCursorPosition(0)
         self.driver = driver
         self.name = name
         self.driver = driver
@@ -1111,10 +1111,13 @@ class Manual(QtWidgets.QDialog):
         # Local Tab
         group = QtWidgets.QGroupBox("Select SoapySDR Driver")
         vbox = QtWidgets.QVBoxLayout()
+
+        # Predefine
+        self.local_option = QtWidgets.QLineEdit(inputMask='annnnnnnnnnnnn=xxxxxxxxxxxxxxxxxxxxxxxxxx')
                         
-        scroll = QtWidgets.QScrollArea()
+        scroll = QtWidgets.QScrollArea(group)
         table = QtWidgets.QWidget()
-        scrollbox = QtWidgets.QVBoxLayout()
+        tbox = QtWidgets.QVBoxLayout()
         for (name,driver,extra) in [
         ( 'AirSpy',         'airspy',   '' ),
         ( 'AirSpy HF+',     'airspyhf', '' ),
@@ -1135,26 +1138,26 @@ class Manual(QtWidgets.QDialog):
         ( 'UHD',            'uhd',      'type' ),
         ]:
             b = QtWidgets.QRadioButton('&'+name,table)
-            b.toggled.connect(lambda n=name, d=driver, e=extra: self._toggle_local(n,d,e))
-            scrollbox.addWidget(b)
-        table.setLayout(scrollbox)
+            b.toggled.connect(lambda n=name, d=driver, e=extra, o=self.local_option: self._toggle_local(n,d,e,o))
+            tbox.addWidget(b)
+        table.setLayout(tbox)
 
         #Scroll Area Properties
 #        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
 #        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        scroll.setWidgetResizable(True)
+#        scroll.setWidgetResizable(True)
+        scroll.setFixedHeight(200)
         scroll.setWidget(table)
         
-        vbox.addWidget(table)
+        vbox.addWidget(scroll)
         
         frame = QtWidgets.QFrame()
         form = QtWidgets.QFormLayout()
         
-        self.option = QtWidgets.QLineEdit(inputMask='annnnnnnnnnnnn=xxxxxxxxxxxxxxxxxxxxxxxxxx')
-        form.addRow("Options:", self.option)
+        form.addRow("Options:", self.local_option)
 
         # Ok Cancel
-        form.addRow(self.OkCancel(signal,parser))
+        form.addRow(self.OkCancel(signal,parser,self.local_option))
         frame.setLayout(form)
         
         vbox.addWidget(frame)
@@ -1177,29 +1180,29 @@ class Manual(QtWidgets.QDialog):
         self.port=QtWidgets.QLineEdit(inputMask='00000;',text='55132')
         form.addRow("Port:", self.port)
         
-        self.option = QtWidgets.QLineEdit(inputMask='annnnnnnnnnnnn=xxxxxxxxxxxxxxxxxxxxxxxxxx')
-        form.addRow("Options:", self.option)
+        self.net_option = QtWidgets.QLineEdit(inputMask='annnnnnnnnnnnn=xxxxxxxxxxxxxxxxxxxxxxxxxx')
+        form.addRow("Options:", self.net_option)
 
         # Ok Cancel
-        form.addRow(self.OkCancel(signal,parser))
+        form.addRow(self.OkCancel(signal,parser,self.net_option))
         group.setLayout(form)
         
         return group
         
-    def OkCancel( self, signal, parser ):
+    def OkCancel( self, signal, parser, option ):
         # Button fields
         buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
-        buttons.accepted.connect(lambda s=signal,p=parser: self.accept(s,p))
+        buttons.accepted.connect(lambda s=signal,p=parser, o=option: self.accept(s,p,o))
         buttons.rejected.connect(self.reject)
         return buttons
         
-    def accept( self, signal, parser ):
-        signal.emit( parser() )
+    def accept( self, signal, parser, option ):
+        signal.emit( parser(option) )
         self.close()
     
-    def option_parse( self ):
+    def option_parse( self, option ):
         try:
-            oo = self.option.text().split('=',1)
+            oo = option.text().split('=',1)
             if oo[0] == '':
                 return None
         except:
