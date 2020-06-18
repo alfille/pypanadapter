@@ -530,7 +530,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
     stream_read_signal = QtCore.pyqtSignal(np.ndarray)
     soapy_list_signal = QtCore.pyqtSignal()
     soapy_pan_signal = QtCore.pyqtSignal(dict)
-    rtl_pan_signal = QtCore.pyqtSignal(dict)
+    rtl_pan_signal = QtCore.pyqtSignal(int)
 
     refresh = 50 # default refresh timer in msec
 
@@ -772,10 +772,10 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         dlg.resize(300,300)
         
         # Local Tab
-        localtab = self.setManualLocal(dlg)
+        localtab = self.setLocal(dlg)
         
         # Network Tab
-        nettab = self.setManualNet(dlg)
+        nettab = self.setNet(dlg)
                 
         # Tabbing structure 
         tab = QtWidgets.QTabWidget( dlg )
@@ -784,7 +784,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
 
         dlg.exec()
     
-    def setManualLocal(self,dlg):
+    def setLocal(self,dlg):
         # Local Tab
         localtab = QtWidgets.QTabWidget()
         lst = {} # Local Tab subtabs
@@ -793,7 +793,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             localtab.addTab(lst[st],st)
         return localtab
 
-    def setManualNet(self,dlg):
+    def setNet(self,dlg):
         # Network Tab
         nettab = QtWidgets.QFrame()
         nettablay = QtWidgets.QVBoxLayout()
@@ -1086,72 +1086,139 @@ class Manual(QtWidgets.QDialog):
         
         # Enclosing Dialog
         self.setWindowTitle( "Manual Panadapter Entry" )
-        self.resize(300,300)
+        self.resize(350,400)
         
         # Local Tab
-        localtab = self.setManualLocal()
+        localtab = self.setLocal(caller.soapy_pan_signal, self.local_parser)
         
         # Network Tab
-        nettab = self.setManualNet()
+        nettab = self.setNet(caller.soapy_pan_signal, self.network_parser)
                 
         # Tabbing structure 
         tab = QtWidgets.QTabWidget(self)
         tab.addTab( nettab, "Network" )
         tab.addTab( localtab, "Direct" )
+
+    def _toggle_local( self, name, driver, extra ):
+        self.option.setText(extra+'=')
+        print(self.option,extra+'=')
+        self.driver = driver
+        self.name = name
+        self.driver = driver
+
             
-    def setManualLocal(self):
+    def setLocal(self, signal, parser):
         # Local Tab
-        localtab = QtWidgets.QTabWidget()
-        lst = {} # Local Tab subtabs
-        for st in ['SoapySDR','USB','RTLSDR']:
-            lst[st] = QtWidgets.QWidget()
-            localtab.addTab(lst[st],st)
-        return localtab
+        group = QtWidgets.QGroupBox("Select SoapySDR Driver")
+        vbox = QtWidgets.QVBoxLayout()
+                        
+        scroll = QtWidgets.QScrollArea()
+        table = QtWidgets.QWidget()
+        scrollbox = QtWidgets.QVBoxLayout()
+        for (name,driver,extra) in [
+        ( 'AirSpy',         'airspy',   '' ),
+        ( 'AirSpy HF+',     'airspyhf', '' ),
+        ( 'Audio',          'audio',    'label' ),
+        ( 'BladeRF',        'bladerf',  '' ),
+        ( 'Epiq Sidekiq',   'sidekiq',  '' ),
+        ( 'FunCube Dondle Pro+', 'fcdpp', '' ),
+        ( 'Hack RF',        'hackrf',   '' ),
+        ( 'Lime LMS7',      'lime',     '' ),
+        ( 'NetSDR',         'netsdr',   '' ),
+        ( 'Novena RF',      'novena',   '' ),
+        ( 'OsmoSDR',        'osmosdr',  '' ),
+        ( 'PlutoSDR',       'plutosdr', 'hostname'),
+        ( 'Red Pitya',      'redpitya', 'addr' ),
+        ( 'RTL-SDR',  'rtlsdr',   '' ),
+        ( 'SDR Play',       'sdrplay',  '' ),
+        ( 'Skylark Iris',   'iris',     '' ),
+        ( 'UHD',            'uhd',      'type' ),
+        ]:
+            b = QtWidgets.QRadioButton('&'+name,table)
+            b.toggled.connect(lambda n=name, d=driver, e=extra: self._toggle_local(n,d,e))
+            scrollbox.addWidget(b)
+        table.setLayout(scrollbox)
 
-    def setManualNet(self):
+        #Scroll Area Properties
+#        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
+#        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(table)
+        
+        vbox.addWidget(table)
+        
+        frame = QtWidgets.QFrame()
+        form = QtWidgets.QFormLayout()
+        
+        self.option = QtWidgets.QLineEdit(inputMask='annnnnnnnnnnnn=xxxxxxxxxxxxxxxxxxxxxxxxxx')
+        form.addRow("Options:", self.option)
+
+        # Ok Cancel
+        form.addRow(self.OkCancel(signal,parser))
+        frame.setLayout(form)
+        
+        vbox.addWidget(frame)
+        group.setLayout(vbox)
+
+        return group
+
+    def setNet(self, signal, parser):
         # Network Tab
-        nettab = QtWidgets.QFrame()
-        nettablay = QtWidgets.QVBoxLayout()
+        group = QtWidgets.QGroupBox("Network Address Entry")
+        form = QtWidgets.QFormLayout()
+        
+        # Entry fields
+        self.name=QtWidgets.QLineEdit('SoapyRemote')
+        form.addRow("Name:", self.name)
 
-        #Entry fields
-        nettab1 = QtWidgets.QWidget()
-        nettab1 = QtWidgets.QGroupBox("Network Address Entry")
-        layout = QtWidgets.QFormLayout()
+        self.address=QtWidgets.QLineEdit(inputMask='000.000.000.000')
+        form.addRow("Host:", self.address)
         
-        name=QtWidgets.QLineEdit('SoapyRemote')
-        layout.addRow(QtWidgets.QLabel("Name:"), name)
+        self.port=QtWidgets.QLineEdit(inputMask='00000;',text='55132')
+        form.addRow("Port:", self.port)
+        
+        self.option = QtWidgets.QLineEdit(inputMask='annnnnnnnnnnnn=xxxxxxxxxxxxxxxxxxxxxxxxxx')
+        form.addRow("Options:", self.option)
 
-        address=QtWidgets.QLineEdit(inputMask='000.000.000.000')
-        layout.addRow(QtWidgets.QLabel("Host:"), address)
+        # Ok Cancel
+        form.addRow(self.OkCancel(signal,parser))
+        group.setLayout(form)
         
-        port=QtWidgets.QLineEdit(inputMask='00000;',text='55132')
-        layout.addRow(QtWidgets.QLabel("Port:"), port)
+        return group
         
-        option = QtWidgets.QLineEdit(inputMask='annnnnnnnnnnnn=xxxxxxxxxxxxxxxxxxxxxxxxxx')
-        layout.addRow(QtWidgets.QLabel("Options:"), option)
-        
-        nettab1.setLayout(layout)
-        nettablay.addWidget(nettab1)
-        
+    def OkCancel( self, signal, parser ):
         # Button fields
-        nettab2 = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
-        nettab2.accepted.connect(lambda a=address.text(), p=port.text(), n=name.text(), o=option.text(): self.network(a,p,n,o))
-        nettab2.rejected.connect(self.reject)
-        nettablay.addWidget(nettab2)
-
-        nettab.setLayout(nettablay)
-        return nettab
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttons.accepted.connect(lambda s=signal,p=parser: self.accept(s,p))
+        buttons.rejected.connect(self.reject)
+        return buttons
         
-    def network( self, a, p, n, o ):
-        arg={'address':a,'port':str(p),'name':n}
-        try:
-            oo = o.split('=',1)
-            if oo[0] != '':
-                arg[oo[0]]=oo[1]
-        except:
-            pass
-        self.caller.soapy_pan_signal.emit(arg)
+    def accept( self, signal, parser ):
+        signal.emit( parser() )
         self.close()
+    
+    def option_parse( self ):
+        try:
+            oo = self.option.text().split('=',1)
+            if oo[0] == '':
+                return None
+        except:
+            return None
+        return oo
+
+    def network_parser( self ):
+        arg={'address':self.address.text(),'port':self.port.text(),'name':self.name.text()}
+        oo = self.option_parse()
+        if oo:
+            arg[oo[0]] = oo[1]
+        return arg
+
+    def local_parser( self ):
+        arg={'driver':self.driver,'name':self.name}
+        oo = self.option_parse()
+        if oo:
+            arg[oo[0]] = oo[1]
+        return arg
 
 # from https://gist.github.com/fladi/8bebdba4c47051afa7cad46e3ead6763 Michael Fladischer
 # from https://gist.github.com/fladi/8bebdba4c47051afa7cad46e3ead6763 Michael Fladischer
