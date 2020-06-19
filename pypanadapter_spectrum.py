@@ -184,7 +184,7 @@ class RTLSDR(PanBlockClass):
     def __init__(self,serial=None,index=None,host=None,port=12345):
         self.driver = None
         if not Flag_rtlsdr:
-            raise ValueError
+            return
         self.serial = serial
         self.index = index
         self.host = host
@@ -207,7 +207,7 @@ class RTLSDR(PanBlockClass):
         except:
             print("RTLSDR not found")
             self.driver = None
-            raise
+            return
         self.driver.sample_rate = self.SampleRate
         
     def __del__(self):
@@ -232,57 +232,48 @@ class RTLSDR(PanBlockClass):
             self.driver.close()
         self.driver = None
 
-class SoapyRemotePan(PanBlockClass):
-    SampleRate = 2.56E6  # Sampling Frequency of the RTLSDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
-    _name = "SoapySDR remote"
-    def __init__(self, dictionary ):
-        self.driver = None
-        #print("Pan",address,port,name,Flag_soapy)
-        if not Flag_soapy:
-            print("No Soapy")
-            raise ValueError
+class SoapyPan(PanBlockClass):
 
-        required_keys = ['address','port','name']
+    SampleRate = 2.56E6  # Sampling Frequency of the RTLSDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+    _name = "SoapySDR"
+
+    def __init__(self, dictionary ):
+        #print(type(self),dictionary)
+        self.driver = None
+        if not Flag_soapy:
+            print("No SoapySDR support")
+            return
+
+        required_keys = ['driver','name']
         # Check for essential arguments
         for k in required_keys:
             if k not in dictionary:
                 print('SoapySDR missing {} entry'.format(k))
-                raise ValueError
+                return
 
-        self.address = dictionary['address']
-        self.port = dictionary['port']
-        self._name = dictionary['name']
         self.SampleRate = type(self).SampleRate
-        self._size = 0 # size of buffer
+        self._size = 0 # size of buffer -- will expand as needed but allows a persistent buffer
 
-        args = {}
-        args['driver'] = 'remote'
-        if ':' in address:
-            # IPV6
-            args['remote'] = "tcp://" + "[" + address + "]:" + str(port)
-        else:
-            # IPV4
-            args['remote'] = "tcp://" + address + ":" + str(port)
-
-        for k in dictionary:
-            if k not in required_keys:
-                args[k] = dictionary[k]
-
-        print("About to try ",name,args)
+        #print("About to try ",dictionary)
         try:
-            self.driver = SoapySDR.Device(args)
+            self.driver = SoapySDR.Device(dictionary)
+            if not self.driver:
+                print("SoapySDR cannot load ",dictionary['driver'],' device ',dictionary['name'])
         except:
-            print("SoapyRemote not found for ",name)
+            print("SoapySDR driver not found for ",dictionary['driver'],' device ',dictionary['name'])
             self.driver = None
-            raise
-        
 
+        # Check if ok till here
+        if not self.driver:
+            return
+        
         #query device info
-        print("Driver loaded")
+        print("SoapySDR driver loaded",dictionary['driver'],' device ',dictionary['name'])
         print(self.driver.listAntennas('ant ',SoapySDR.SOAPY_SDR_RX, 0))
         print(self.driver.listGains('gain ',SoapySDR.SOAPY_SDR_RX, 0))
         freqs = self.driver.getFrequencyRange(SoapySDR.SOAPY_SDR_RX, 0)
-        for freqRange in freqs: print('freq ',freqRange)
+        for freqRange in freqs:
+            print('freq ',freqRange)
         
         #setup a stream (complex floats)
         self.rxStream = self.driver.setupStream(SoapySDR.SOAPY_SDR_RX, SoapySDR.SOAPY_SDR_CF32)
@@ -308,6 +299,44 @@ class SoapyRemotePan(PanBlockClass):
             self.driver.close()
         self.driver = None
 
+class SoapyRemotePan(SoapyPan):
+    
+    SampleRate = 2.56E6  # Sampling Frequency of the RTLSDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
+    _name = "SoapyRemote"
+    
+    def __init__(self, dictionary ):
+        self.driver = None
+        #print(type(self),dictionary)
+
+        if not Flag_soapy:
+            print("No SoapySDR")
+            return
+
+        # Check for essential arguments
+        required_keys = ['address','port','name']
+        for k in required_keys:
+            if k not in dictionary:
+                print('SoapySDR missing {} entry'.format(k))
+                return
+
+        args = {}
+        args['driver'] = 'remote'
+        if ':' in dictionary['address']:
+            # IPV6
+            args['remote'] = "tcp://" + "[" + dictionary['address'] + "]:" + str(dictionary['port'])
+        else:
+            # IPV4
+            args['remote'] = "tcp://" + dictionary['address'] + ":" + str(dictionary['port'])
+
+        for k in dictionary:
+            if k not in required_keys:
+                args[k] = dictionary[k]
+        
+        # Add Name back in
+        args['name'] = dictionary['name']
+
+        super().__init__(args)
+
 class AudioPan(PanStreamClass):
     SampleRate = 44100.0
     _name = "Audio"
@@ -315,18 +344,22 @@ class AudioPan(PanStreamClass):
         global AppState
         if not Flag_audio:
             self.driver = None
-            raise ValueError
+            return
         if AppState.audio:
             self.driver = None
             try:
                 info = AppState.audio.get_device_info_by_index( index)
                 self._name = info['name']
                 self.SampleRate = info['defaultSampleRate']
+                self.driver = 'quiet'
             except:
                 print("Could not open audio device")
+                
         self.index = index
     
     def Stream( self, update_function , chunk_size ) :
+        if not self.driver:
+            return
         try:
             self.driver = AppState.audio.open(
                 format=pyaudio.paFloat32,
@@ -369,8 +402,7 @@ class RandomPan(PanBlockClass):
     SampleRate = 2.56E6
     _name = "Random"
     def __init__(self):
-        if not Flag_random:
-            raise ValueError
+        self.driver = Flag_random
         
     def SetFrequency(self, IF ):
         pass
@@ -385,7 +417,7 @@ class ConstantPan(PanBlockClass):
     SampleRate = 2.56E6 
     _name = "Constant"
     def __init__(self):
-        pass
+        self.driver = True
         
     def SetFrequency(self, IF ):
         pass
@@ -488,6 +520,10 @@ class ProgramState:
         
     @panadapter.setter
     def panadapter( self, panadapter ):
+        if not panadapter.driver:
+            panadapter = RandomPan()
+        if not panadapter.driver:
+            panadapter = ConstantPan()
         if panadapter != self._panadapter:
             self._resetNeeded = True
         self._panadapter = panadapter
@@ -529,6 +565,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
     block_read_signal = QtCore.pyqtSignal(np.ndarray)
     stream_read_signal = QtCore.pyqtSignal(np.ndarray)
     soapy_list_signal = QtCore.pyqtSignal()
+    soapy_remote_pan_signal = QtCore.pyqtSignal(dict)
     soapy_pan_signal = QtCore.pyqtSignal(dict)
     rtl_pan_signal = QtCore.pyqtSignal(int)
 
@@ -564,6 +601,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         self.block_read_signal.connect(self.update)
         self.stream_read_signal.connect(self.read_callback)
         self.soapy_list_signal.connect(self.remakePanMenu)
+        self.soapy_remote_pan_signal.connect(self.setSoapyRemote)
         self.soapy_pan_signal.connect(self.setSoapy)
         self.rtl_pan_signal.connect(self.setRtlsdr)
 
@@ -721,7 +759,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             for ((address,port),name) in AppState.soapylist.items():
                 #print("Pan",name)
                 m = QtWidgets.QAction('{}\t\t{} : {}'.format(name,address,port),self)
-                m.triggered.connect(lambda state,a=address,p=port,n=name: self.soapy_pan_signal.emit({'address':a,'port':str(p),'name':n}))
+                m.triggered.connect(lambda state,a=address,p=port,n=name: self.soapy_remote_pan_signal.emit({'address':a,'port':str(p),'name':n}))
                 network.addAction(m)
             
         if Flag_audio:
@@ -772,10 +810,10 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         dlg.resize(300,300)
         
         # Local Tab
-        localtab = self.setLocal(dlg)
+        localtab = self.LocalTab(dlg)
         
         # Network Tab
-        nettab = self.setNet(dlg)
+        nettab = self.NetTab(dlg)
                 
         # Tabbing structure 
         tab = QtWidgets.QTabWidget( dlg )
@@ -784,7 +822,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
 
         dlg.exec()
     
-    def setLocal(self,dlg):
+    def LocalTab(self,dlg):
         # Local Tab
         localtab = QtWidgets.QTabWidget()
         lst = {} # Local Tab subtabs
@@ -793,7 +831,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             localtab.addTab(lst[st],st)
         return localtab
 
-    def setNet(self,dlg):
+    def NetTab(self,dlg):
         # Network Tab
         nettab = QtWidgets.QFrame()
         nettablay = QtWidgets.QVBoxLayout()
@@ -825,10 +863,22 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             self.Loop(True)
 
     @QtCore.pyqtSlot(dict)
-    def setSoapy( self, dictionary):
-        print("Set Soapy",dictionary)
+    def setSoapyRemote( self, dictionary):
+        global AppState
+        #print("Set SoapyRemote",dictionary)
         try: 
             AppState.panadapter = SoapyRemotePan(dictionary )
+            if AppState.resetNeeded:
+                self.Loop(True)
+        except:
+            pass
+
+    @QtCore.pyqtSlot(dict)
+    def setSoapy( self, dictionary):
+        global AppState
+        #print("Set Soapy",dictionary)
+        try: 
+            AppState.panadapter = SoapyPan(dictionary )
             if AppState.resetNeeded:
                 self.Loop(True)
         except:
@@ -1089,31 +1139,30 @@ class Manual(QtWidgets.QDialog):
         self.resize(350,400)
         
         # Local Tab
-        localtab = self.setLocal(caller.soapy_pan_signal, self.local_parser)
+        localtab = self.LocalTab(caller.soapy_pan_signal, self.local_parser)
         
         # Network Tab
-        nettab = self.setNet(caller.soapy_pan_signal, self.network_parser)
+        nettab = self.NetTab(caller.soapy_remote_pan_signal, self.network_parser)
                 
         # Tabbing structure 
         tab = QtWidgets.QTabWidget(self)
         tab.addTab( nettab, "Network" )
         tab.addTab( localtab, "Direct" )
 
-    def _toggle_local( self, name, driver, extra, option ):
-        option.setText(extra+'=')
-        option.setCursorPosition(0)
+    def _toggle_local( self, name, driver, extra, qoption ):
+        qoption.setText(extra+'=')
+        qoption.setCursorPosition(0)
         self.driver = driver
         self.name = name
-        self.driver = driver
 
             
-    def setLocal(self, signal, parser):
+    def LocalTab(self, signal, parser):
         # Local Tab
         group = QtWidgets.QGroupBox("Select SoapySDR Driver")
         vbox = QtWidgets.QVBoxLayout()
 
         # Predefine
-        self.local_option = QtWidgets.QLineEdit(inputMask='annnnnnnnnnnnn=xxxxxxxxxxxxxxxxxxxxxxxxxx')
+        self.qlocal_option = QtWidgets.QLineEdit(inputMask='annnnnnnnnnnnn=xxxxxxxxxxxxxxxxxxxxxxxxxx')
                         
         scroll = QtWidgets.QScrollArea(group)
         table = QtWidgets.QWidget()
@@ -1138,7 +1187,7 @@ class Manual(QtWidgets.QDialog):
         ( 'UHD',            'uhd',      'type' ),
         ]:
             b = QtWidgets.QRadioButton('&'+name,table)
-            b.toggled.connect(lambda n=name, d=driver, e=extra, o=self.local_option: self._toggle_local(n,d,e,o))
+            b.toggled.connect(lambda n=name, d=driver, e=extra, qo=self.qlocal_option: self._toggle_local(n,d,e,qo))
             tbox.addWidget(b)
         table.setLayout(tbox)
 
@@ -1154,10 +1203,10 @@ class Manual(QtWidgets.QDialog):
         frame = QtWidgets.QFrame()
         form = QtWidgets.QFormLayout()
         
-        form.addRow("Options:", self.local_option)
+        form.addRow("Options:", self.qlocal_option)
 
         # Ok Cancel
-        form.addRow(self.OkCancel(signal,parser,self.local_option))
+        form.addRow(self.OkCancel(signal,parser,self.qlocal_option))
         frame.setLayout(form)
         
         vbox.addWidget(frame)
@@ -1165,39 +1214,39 @@ class Manual(QtWidgets.QDialog):
 
         return group
 
-    def setNet(self, signal, parser):
+    def NetTab(self, signal, parser):
         # Network Tab
         group = QtWidgets.QGroupBox("Network Address Entry")
         form = QtWidgets.QFormLayout()
         
         # Entry fields
-        self.name=QtWidgets.QLineEdit('SoapyRemote')
-        form.addRow("Name:", self.name)
+        self.qname=QtWidgets.QLineEdit('SoapyRemote')
+        form.addRow("Name:", self.qname)
 
-        self.address=QtWidgets.QLineEdit(inputMask='000.000.000.000')
-        form.addRow("Host:", self.address)
+        self.qaddress=QtWidgets.QLineEdit(inputMask='000.000.000.000')
+        form.addRow("Host:", self.qaddress)
         
-        self.port=QtWidgets.QLineEdit(inputMask='00000;',text='55132')
-        form.addRow("Port:", self.port)
+        self.qport=QtWidgets.QLineEdit(inputMask='00000;',text='55132')
+        form.addRow("Port:", self.qport)
         
-        self.net_option = QtWidgets.QLineEdit(inputMask='annnnnnnnnnnnn=xxxxxxxxxxxxxxxxxxxxxxxxxx')
-        form.addRow("Options:", self.net_option)
+        self.qnet_option = QtWidgets.QLineEdit(inputMask='annnnnnnnnnnnn=xxxxxxxxxxxxxxxxxxxxxxxxxx')
+        form.addRow("Options:", self.qnet_option)
 
         # Ok Cancel
-        form.addRow(self.OkCancel(signal,parser,self.net_option))
+        form.addRow(self.OkCancel(signal,parser,self.qnet_option))
         group.setLayout(form)
         
         return group
         
-    def OkCancel( self, signal, parser, option ):
+    def OkCancel( self, signal, parser, qoption ):
         # Button fields
         buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
-        buttons.accepted.connect(lambda s=signal,p=parser, o=option: self.accept(s,p,o))
+        buttons.accepted.connect(lambda s=signal,p=parser, qo=qoption: self.accept(s,p,qo))
         buttons.rejected.connect(self.reject)
         return buttons
         
-    def accept( self, signal, parser, option ):
-        signal.emit( parser(option) )
+    def accept( self, signal, parser, qoption ):
+        signal.emit( parser() )
         self.close()
     
     def option_parse( self, option ):
@@ -1210,15 +1259,15 @@ class Manual(QtWidgets.QDialog):
         return oo
 
     def network_parser( self ):
-        arg={'address':self.address.text(),'port':self.port.text(),'name':self.name.text()}
-        oo = self.option_parse()
+        arg={'address':self.qaddress.text(),'port':self.qport.text(),'name':self.qname.text()}
+        oo = self.option_parse(self.qnet_option)
         if oo:
             arg[oo[0]] = oo[1]
         return arg
 
     def local_parser( self ):
         arg={'driver':self.driver,'name':self.name}
-        oo = self.option_parse()
+        oo = self.option_parse(self.qlocal_option)
         if oo:
             arg[oo[0]] = oo[1]
         return arg
@@ -1363,18 +1412,11 @@ def main(args):
 
     TransmissionMode.next() # prime mode list
 
-    sdr_class = PanClass.Match( args.sdr, 2 )
-    if not sdr_class:
-        sdr_class = ConstantPan
-    # open sdr (or at least try)
-    try:
-        AppState.panadapter = sdr_class()
-    except:
-        print('Could not open panadapter {} -- switch to random'.format(sdr_class._name))
-        if Flag_random:
-            AppState.panadapter = RandomPan()
-        else:
-            AppState.panadapter = ConstantPan()
+    pan_class = PanClass.Match( args.sdr, 2 )
+    if pan_class:
+        AppState.panadapter = pan_class()
+    else:
+        AppState.panadapter = RandomPan()
 
     AppState.radio_class = Radio.Match( args.radio )
     
