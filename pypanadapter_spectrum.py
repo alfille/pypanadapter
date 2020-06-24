@@ -152,6 +152,9 @@ class PanClass(SubclassManager):
     def Mode( self ):
         # Stream or Block
         return type(self).Mode
+        
+    def Menu( self, menu, parent ):
+        return menu.addMenu( "Pan &Configure" )
 
 class PanStreamClass(PanClass):
     # All PanAdapters that stream Data
@@ -398,35 +401,231 @@ class AudioPan(PanStreamClass):
             self.driver.closeStream(self.rxStream)
         self.driver = None
 
-class RandomPan(PanBlockClass):
-    SampleRate = 2.56E6
-    _name = "Random"
+class Waveform(SubclassManager):
+    _name = "Default Waveform"
     def __init__(self):
-        self.driver = Flag_random
+        self._size = 0
+        self._phase = 0.
+        self.new_phase = self._phase
+        self._cycles = 1.
+        self.new_cycles = self._cycles
         
-    def SetFrequency(self, IF ):
+    @property
+    def name(self):
+        return type(self)._name
+        
+    @property
+    def phase(self):
+        return self._phase
+        
+    @phase.setter
+    def phase( self, p ):
+        self.new_phase = p
+
+    @property
+    def cycles(self):
+        return self._cycles
+        
+    @cycles.setter
+    def cycles( self, c ):
+        if c == 0.:
+            c = 1.
+        self.new_cycles = c
+        
+    def makeArray(self):
+         self.data = (np.zeros(self._size)+.00000000001) + (np.zeros(self._size)+.0000000001)*1j
+       
+    def create( self ):
+        # default
+        pass
+            
+    def Read( self, size ):
+        #print("Size",self._size)
+        if (self._size != size) or (self._cycles != self.new_cycles) or (self._phase != self.new_phase):
+            print("Create",size,self._cycles,self._phase)
+            
+            self._size = size
+            self._phase = self.new_phase
+            self._cycles = self.new_cycles
+            
+            # tests
+            if self._cycles > self._size:
+                self._cycles = self._size
+            if self._cycles <= 0.:
+                self._cycles = 1.
+            self._phase %= 360.
+            if self._phase < 0.:
+                self._phase += 360.
+                
+            self.new_phase = self._phase
+            self.new_cycles = self._cycles
+            print("Create",size,self._cycles,self._phase)
+                        
+            self.makeArray() 
+            self.create()
+        return self.data
+        
+class Square(Waveform):
+    _name = "Square Waveform"
+    def __init__(self):
+        super().__init__()
+        
+    def create(self):
+        cycle_length = int(self._size / self._cycles)
+        half_cycle_length = cycle_length // 2
+
+        for i in range( 0,self._size,cycle_length ):
+            for j in range(i,i+half_cycle_length):
+                if j >= self._size:
+                    break
+                self.data[j] += 1
+                
+        #phase correction
+        np.roll(self.data,int(cycle_length*self._phase/360.))
+            
+class Sawtooth(Waveform):
+    _name = "Sawtooth Waveform"
+    def __init__(self):
+        super().__init__()
+        
+    def create(self):
+        cycle_length = int(self._size / self._cycles)
+        delta = 2.0 / cycle_length
+        
+        x = -1.
+        for i in range( 0,self._size,cycle_length ):
+            x=-1.
+            for j in range(i,i+cycle_length):
+                if j >= self._size:
+                    break
+                self.data[j] += x
+                x += delta
+                
+        #phase correction
+        np.roll(self.data,int(cycle_length*self._phase/360.))
+
+class Triangle(Waveform):
+    _name = "Triangle Waveform"
+    def __init__(self):
+        super().__init__()
+        
+    def create(self):
+        s = Sawtooth()
+        s.phase = self._phase
+        s.cycles = self._cycles
+        a = s.Read( self._size )
+        self.data = 2*np.maximum(a,-a)-1
+
+class Digits(Waveform):
+    _name = "Digit Waveform"
+    def __init__(self):
+        super().__init__()
+        
+    def create(self):
+        mx = 0
+        cycle_length = int(self._size / self._cycles)
+
+        for i in range(0,self._size,cycle_length):
+            for j in range(i,i+cycle_length):
+                if j >= self._size:
+                    break
+                d = 0
+                e = j
+                while e > 0 :
+                    d += e & 1
+                    e >>= 1
+                mx = max(mx,d)
+                self.data[j] = d
+                
+        #phase correction
+        np.roll(self.data,int(cycle_length*self._phase/360.))
+
+        # normalize
+        self.data /= mx
+        
+class Sine(Waveform):
+    _name = "Sine Waveform"
+    def __init__(self):
+        super().__init__()
+        
+    def create(self):
+        dangle = 2 * np.pi / (self._size*self._cycles)
+        angle = 2 * np.pi * (self._phase / 360.)
+        for i in range(self._size):
+            self.data[i] = np.sin(angle) + np.cos(angle)*1j
+            angle += dangle
+
+class Random(Waveform):
+    def __init__(self):
         pass
         
     def Read(self,size):
-        return 2*(np.random.random(int(size))+np.random.random(int(size))*1j)-(1.+1.j)
-        
-    def Close(self):
-        self.driver = None
+        return 2*(np.random.random(size)+np.random.random(size)*1j)-(1.+1.j)
 
-class ConstantPan(PanBlockClass):
+class WaveformPan(PanBlockClass):
     SampleRate = 2.56E6 
-    _name = "Constant"
+    _name = "Waveform"
+
     def __init__(self):
         self.driver = True
+        self.squarewave = False
+        self.modules = [l.__name__ for l in Waveform.List()]
+        if not Flag_random:
+            self.modules.remove('Random')
+        self.phase = 0.
+        self.cycles = 1.
+        self._waveform_select( self.modules[0] )
         
     def SetFrequency(self, IF ):
         pass
         
     def Read(self,size):
-        return 2*(np.zeros(int(size)))+.5
+        return self.waveform.Read( int(size) )
         
     def Close(self):
         self.driver = None
+    
+    def _waveform_select( self, w ):
+        self.module_chosen = w
+        self.waveform = Waveform.Match( w )()
+        self.name = self.waveform.name
+        self.waveform.phase = self.phase 
+        self.waveform.cycles = self.cycles 
+        
+    def Phase( self, parent ):
+        print(parent)
+        p, ok = QtWidgets.QInputDialog.getDouble( parent, 'Phase Angle', 'Enter in degrees:', self.phase, 0., 360., 2 )
+        if ok:
+            self.waveform.phase = p
+            self.phase = p
+        
+    def Cycles( self, parent ):
+        print(parent)
+        c, ok = QtWidgets.QInputDialog.getDouble( parent, 'Cycles', 'Enter repeats:', self.cycles, 0.1 )
+        if ok:
+            self.waveform.cycles = c
+            self.cycles = c
+        
+    def Menu( self, menu, parent ):
+        this_menu = super().Menu(menu, parent )
+        
+        waveform = this_menu.addMenu('&Waveform')
+        waveaction = QtWidgets.QActionGroup(waveform)
+        for w in self.modules:
+            m = QtWidgets.QAction('&'+w,waveaction,checkable=True,checked=(w==self.module_chosen))
+            m.triggered.connect(lambda state, x=w: self._waveform_select(x))
+            waveform.addAction(m)
+        
+        phase = QtWidgets.QAction('&Phase...',parent)
+        phase.triggered.connect(lambda state, p=parent: self.Phase(p) )
+        this_menu.addAction(phase)
+        
+        cycles = QtWidgets.QAction('&Cycles...',parent)
+        cycles.triggered.connect(lambda state, p=parent: self.Cycles(p) )
+        this_menu.addAction(cycles)
+
+#        this_menu.addAction(waveform)
+        return this_menu
 
 class TransmissionMode(SubclassManager):
     # Signal types
@@ -480,6 +679,7 @@ class ProgramState:
         self._resetNeeded = False
         self._Loop = True # for initial entry into loop
         self._soapylist = {}
+        self.fft_window='hamming'
         self.discover = None
         if Flag_audio:
             sys.stderr.write("\n--------------------------------------------------------\n\tSetup output from PyAudio follows -- usually can be ignored\n")
@@ -487,6 +687,9 @@ class ProgramState:
             sys.stderr.write("\tEnd of PyAudio setup\n--------------------------------------------------------\n\n")
         else:
             self.audio = None
+            
+    def setWindow( self, win ):
+        self.fft_window = win
 
     @property
     def Loop(self):
@@ -521,9 +724,7 @@ class ProgramState:
     @panadapter.setter
     def panadapter( self, panadapter ):
         if not panadapter.driver:
-            panadapter = RandomPan()
-        if not panadapter.driver:
-            panadapter = ConstantPan()
+            panadapter = WaveformPan()
         if panadapter != self._panadapter:
             self._resetNeeded = True
         self._panadapter = panadapter
@@ -702,12 +903,6 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         if AppState.resetNeeded:
             self.Loop(True)
 
-    def setRandom( self ):
-        global AppState
-        AppState.panadapter = RandomPan()
-        if AppState.resetNeeded:
-            self.Loop(True)
-
     def makeMenu( self ):
         global AppState
         menu = self.menuBar()
@@ -725,6 +920,8 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         panmenu = menu.addMenu('&Panadapter')
         self.makePanMenu(panmenu)
         
+        AppState.panadapter.Menu( menu, self )
+        
         radiomenu = menu.addMenu('&Radio')
 
         make_dict = {}
@@ -738,6 +935,32 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
 
         viewmenu = menu.addMenu('&View')
         Panels.addMenus( viewmenu, self )
+
+        fftmenu = menu.addMenu('&Spectrum')
+        win_type = fftmenu.addMenu('FFT &window')
+        win_action_group = QtWidgets.QActionGroup(win_type)
+        for w in [
+            'barthann',
+            'bartlett',
+            'blackmanharris',
+            'blackman',
+            'bohman',
+            'boxcar',
+            'flattop',
+            'hamming',
+            'hann',
+            'parzen',
+            'nuttall',
+            'triang'
+            ]:
+            m = QtWidgets.QAction('&'+w,win_action_group,checkable=True,checked=(AppState.fft_window==w))
+            m.triggered.connect(lambda state, win=w: AppState.setWindow(win))
+            win_type.addAction(m)
+        # make sure at least one is chosen
+        if not win_action_group.checkedAction():
+            AppState.setWindow('hamming')
+            
+        
 
     def remakePanMenu( self ):
         self.panmenu.clear()
@@ -783,15 +1006,9 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
                     m.triggered.connect(lambda state,index=d: self.rtl_pan_signal.emit(index) )
                     rtl.addAction(m) 
 
-        if Flag_random:
-            m = QtWidgets.QAction('Random',self)
-            m.triggered.connect(self.setRandom)
-            menu.addAction(m)
-            menu.addSeparator()
-
         if True:
-            m = QtWidgets.QAction('Constant',self)
-            m.triggered.connect(self.setConstant)
+            m = QtWidgets.QAction('Math &Waveforms',self)
+            m.triggered.connect(self.setWaveform)
             menu.addAction(m)
             menu.addSeparator()
             
@@ -856,9 +1073,9 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         return nettab
 
 
-    def setConstant( self ):
+    def setWaveform( self ):
         global AppState
-        AppState.panadapter = ConstantPan()
+        AppState.panadapter = WaveformPan()
         if AppState.resetNeeded:
             self.Loop(True)
 
@@ -1029,6 +1246,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         return x_mix 
 
     def update(self, chunk):
+        # update the displays with the new data (chunk)
         global AppState
         bw_hz = AppState.panadapter.SampleRate/float(FFT_SIZE) * float(self.N_WIN)
         self.win.setWindowTitle('PEPYSCOPE - IS0KYB - N_FFT: %d, BW: %.1f kHz' % (FFT_SIZE, bw_hz/1000./self.fft_ratio))
@@ -1036,7 +1254,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         if self.fft_ratio>1:
             chunk = self.zoomfft(chunk, self.fft_ratio)
 
-        sample_freq, spec = welch(chunk, AppState.panadapter.SampleRate, window="hamming", nperseg=FFT_SIZE,  nfft=FFT_SIZE)
+        sample_freq, spec = welch(chunk, AppState.panadapter.SampleRate, window=AppState.fft_window, nperseg=FFT_SIZE,  nfft=FFT_SIZE)
         spec = np.roll(spec, FFT_SIZE//2, 0)[FFT_SIZE//2-self.N_WIN//2:FFT_SIZE//2+self.N_WIN//2]
         
         # get magnitude 
@@ -1416,7 +1634,7 @@ def main(args):
     if pan_class:
         AppState.panadapter = pan_class()
     else:
-        AppState.panadapter = RandomPan()
+        AppState.panadapter = WaveformPan()
 
     AppState.radio_class = Radio.Match( args.radio )
     
