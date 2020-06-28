@@ -482,7 +482,7 @@ class Waveform(SubclassManager):
             self.new_phase = self._phase
             self.new_cycles = self._cycles
             self.new_skew = self._skew
-            print("Create cy ph sk",size,self._cycles,self._phase,self.skew)
+            #print("Create cy ph sk",size,self._cycles,self._phase,self.skew)
                         
             self.makeArray() 
             self.create()
@@ -613,14 +613,6 @@ class WaveformParameter():
         self._setter( value )
 
     @property
-    def lower( self ):
-        return self._lower
-        
-    @property
-    def upper( self ):
-        return self._upper
-
-    @property
     def value( self ):
         return self._value
 
@@ -643,23 +635,27 @@ class WaveformParameter():
         self.signal.emit()
 
     def set_pair( self, parent, signal ):
-        value = self._getter()
         self.signal = signal
 
         self.left = QtWidgets.QSlider(QtCore.Qt.Horizontal,parent)
-        self.left.setRange( self.to_slider(self.lower), self.to_slider(self.upper) )
-        self.left.setValue(self.to_slider(value))
+        self.left.setRange( self.to_slider(self._lower), self.to_slider(self._upper) )
         self.left.setTickPosition(QtWidgets.QSlider.TicksBelow)
         self.left.setTickInterval(10)
         self.left.valueChanged.connect(self.leftChange)
 
         self.right = QtWidgets.QDoubleSpinBox(parent)
-        self.right.setRange( self.lower, self.upper )
-        self.right.setValue(value)
+        self.right.setRange( self._lower, self._upper )
         self.right.setDecimals(2)
         self.right.valueChanged.connect(self.rightChange)
+
+        self.update()
         
         return (self.left,self.right)
+        
+    def update( self ):
+        value = self._getter()
+        self.left.setValue(self.to_slider(value))
+        self.right.setValue(value)
 
 class WaveformControl(QtWidgets.QDialog):
     math_change_signal = QtCore.pyqtSignal()
@@ -702,6 +698,7 @@ class WaveformControl(QtWidgets.QDialog):
         plot.setBackground('w') 
         plot.setXRange(0,360,padding = 0) 
         plot.setYRange(-1,1,padding = .05)
+        plot.hideAxis('bottom')
         data =  caller.waveform.Read(360)
         self.real = plot.plot(np.real(data),pen=pg.mkPen(color='k',width=2))
         self.imag = plot.plot(np.imag(data),pen=pg.mkPen(color='r',width=2))
@@ -732,6 +729,8 @@ class WaveformControl(QtWidgets.QDialog):
         
     def changeWaveform( self, w ):
         self.caller.waveform_select(w)
+        for wp in [ self.phase, self.skew, self.cycles ]:
+            wp.update()
         self.ShowCurve()
     
     def closeEvent( self, event ):
