@@ -123,6 +123,8 @@ class Custom(Radio):
     def __init(self,IF):
         self.IF = IF
 
+
+
 class PanClass(SubclassManager):
     # Pan adapter device including RTLSDR
     _name = "Panadapter"
@@ -153,8 +155,15 @@ class PanClass(SubclassManager):
         # Stream or Block
         return type(self).Mode
         
-    def Menu( self, menu, parent ):
-        return menu.addMenu( "Pan &Configure" )
+    def Menu( self, menu, parent, action=False ):
+        if action:
+            # action true -- just make an active choice (for modeless dialog usually)
+            act = QtWidgets.QAction("Pan &Configure",parent)
+            menu.addAction(act)
+            return act
+        else:
+            # Make a submenu stub
+            return menu.addMenu( "Pan &Configure" )
 
 class PanStreamClass(PanClass):
     # All PanAdapters that stream Data
@@ -402,17 +411,18 @@ class AudioPan(PanStreamClass):
         self.driver = None
 
 class Waveform(SubclassManager):
-    _name = "Default Waveform"
     def __init__(self):
         self._size = 0
         self._phase = 0.
         self.new_phase = self._phase
         self._cycles = 1.
         self.new_cycles = self._cycles
+        self._skew = .5
+        self.new_skew = self._skew
         
     @property
     def name(self):
-        return type(self)._name
+        return type(self).__name__
         
     @property
     def phase(self):
@@ -432,6 +442,14 @@ class Waveform(SubclassManager):
             c = 1.
         self.new_cycles = c
         
+    @property
+    def skew(self):
+        return self._skew
+        
+    @skew.setter
+    def skew( self, s ):
+        self.new_skew = s
+        
     def makeArray(self):
          self.data = (np.zeros(self._size)+.00000000001) + (np.zeros(self._size)+.0000000001)*1j
        
@@ -441,12 +459,12 @@ class Waveform(SubclassManager):
             
     def Read( self, size ):
         #print("Size",self._size)
-        if (self._size != size) or (self._cycles != self.new_cycles) or (self._phase != self.new_phase):
-            print("Create",size,self._cycles,self._phase)
+        if (self._size != size) or (self._cycles != self.new_cycles) or (self._phase != self.new_phase)or (self._skew != self.new_skew):
             
             self._size = size
             self._phase = self.new_phase
             self._cycles = self.new_cycles
+            self._skew = self.new_skew
             
             # tests
             if self._cycles > self._size:
@@ -456,13 +474,23 @@ class Waveform(SubclassManager):
             self._phase %= 360.
             if self._phase < 0.:
                 self._phase += 360.
+            if self._skew < 0.:
+                self._skew = 0.
+            if self._skew > 1.:
+                self._skew = 1.
                 
             self.new_phase = self._phase
             self.new_cycles = self._cycles
-            print("Create",size,self._cycles,self._phase)
+            self.new_skew = self._skew
+            print("Create cy ph sk",size,self._cycles,self._phase,self.skew)
                         
             self.makeArray() 
             self.create()
+
+            #phase correction
+            cycle_length = int(self._size / self._cycles)
+            self.data = np.roll(self.data,int(cycle_length*self._phase/360.))
+
         return self.data
         
 class Square(Waveform):
@@ -472,17 +500,12 @@ class Square(Waveform):
         
     def create(self):
         cycle_length = int(self._size / self._cycles)
-        half_cycle_length = cycle_length // 2
+        skew_length = cycle_length * self._skew
 
-        for i in range( 0,self._size,cycle_length ):
-            for j in range(i,i+half_cycle_length):
-                if j >= self._size:
-                    break
-                self.data[j] += 1
-                
-        #phase correction
-        np.roll(self.data,int(cycle_length*self._phase/360.))
-            
+        for i in range( 0,self._size ):
+            if i % cycle_length <= skew_length:
+                self.data[i] += 1
+                            
 class Sawtooth(Waveform):
     _name = "Sawtooth Waveform"
     def __init__(self):
@@ -490,19 +513,15 @@ class Sawtooth(Waveform):
         
     def create(self):
         cycle_length = int(self._size / self._cycles)
-        delta = 2.0 / cycle_length
-        
-        x = -1.
-        for i in range( 0,self._size,cycle_length ):
-            x=-1.
-            for j in range(i,i+cycle_length):
-                if j >= self._size:
-                    break
-                self.data[j] += x
-                x += delta
-                
-        #phase correction
-        np.roll(self.data,int(cycle_length*self._phase/360.))
+        s = self._skew
+        if s < .01:
+            s = .01
+        elif s > .99:
+            s = .99
+        p = math.log(.5) / math.log(s)
+
+        for i in range( 0,self._size ):
+            self.data[i] += math.pow((i%cycle_length)/cycle_length,p)
 
 class Triangle(Waveform):
     _name = "Triangle Waveform"
@@ -510,11 +529,22 @@ class Triangle(Waveform):
         super().__init__()
         
     def create(self):
-        s = Sawtooth()
-        s.phase = self._phase
-        s.cycles = self._cycles
-        a = s.Read( self._size )
-        self.data = 2*np.maximum(a,-a)-1
+        cycle_length = int(self._size / self._cycles)
+
+        if self._skew == 0.:
+            for i in range(self._size):
+                self.data[i] += 1 - ( i % cycle_length ) / cycle_length
+        elif self._skew == 1.:
+            for i in range(self._size):
+                self.data[i] += ( i % cycle_length ) / cycle_length
+        else:
+            skew_length = cycle_length * self._skew
+            for i in range(self._size):
+                x = i % cycle_length
+                if x < skew_length:
+                    self.data[i] += x / skew_length
+                else:
+                    self.data[i] += (cycle_length - x) / (cycle_length - skew_length)
 
 class Digits(Waveform):
     _name = "Digit Waveform"
@@ -536,9 +566,6 @@ class Digits(Waveform):
                     e >>= 1
                 mx = max(mx,d)
                 self.data[j] = d
-                
-        #phase correction
-        np.roll(self.data,int(cycle_length*self._phase/360.))
 
         # normalize
         self.data /= mx
@@ -549,19 +576,182 @@ class Sine(Waveform):
         super().__init__()
         
     def create(self):
-        dangle = 2 * np.pi / (self._size*self._cycles)
-        angle = 2 * np.pi * (self._phase / 360.)
+        delta_angle = 2 * np.pi * self._cycles / self._size
+        angle = 0.
         for i in range(self._size):
             self.data[i] = np.sin(angle) + np.cos(angle)*1j
-            angle += dangle
+            angle += delta_angle
 
 class Random(Waveform):
     def __init__(self):
-        pass
+        super().__init__()
         
     def Read(self,size):
         return 2*(np.random.random(size)+np.random.random(size)*1j)-(1.+1.j)
 
+class WaveformParameter():
+    def __init__( self, name, getter, setter, lower, upper, to_spinbox, to_slider ):
+        self._name = name
+        self._getter = getter
+        self._setter = setter
+        self._lower = lower
+        self._upper = upper
+        self._value = 0
+        self.to_spinbox = to_spinbox
+        self.to_slider = to_slider
+        self.left = None
+        self.right = None
+        
+    @property
+    def name( self ):
+        return self._name
+        
+    def getValue( self ):
+        return self._getter()
+        
+    def setValue( self, value ):
+        self._setter( value )
+
+    @property
+    def lower( self ):
+        return self._lower
+        
+    @property
+    def upper( self ):
+        return self._upper
+
+    @property
+    def value( self ):
+        return self._value
+
+    @value.setter
+    def value( self, v ):
+        self._value = v
+
+    def leftChange( self ):
+        i = self.left.value()
+        f = self.to_spinbox(i)
+        self.right.setValue(f)
+        self._setter(f)
+        self.signal.emit()
+        
+    def rightChange( self, f ):
+        f = self.right.value()
+        i = self.to_slider(f)
+        self.left.setValue(i)
+        self._setter(f)
+        self.signal.emit()
+
+    def set_pair( self, parent, signal ):
+        value = self._getter()
+        self.signal = signal
+
+        self.left = QtWidgets.QSlider(QtCore.Qt.Horizontal,parent)
+        self.left.setRange( self.to_slider(self.lower), self.to_slider(self.upper) )
+        self.left.setValue(self.to_slider(value))
+        self.left.setTickPosition(QtWidgets.QSlider.TicksBelow)
+        self.left.setTickInterval(10)
+        self.left.valueChanged.connect(self.leftChange)
+
+        self.right = QtWidgets.QDoubleSpinBox(parent)
+        self.right.setRange( self.lower, self.upper )
+        self.right.setValue(value)
+        self.right.setDecimals(2)
+        self.right.valueChanged.connect(self.rightChange)
+        
+        return (self.left,self.right)
+
+class WaveformControl(QtWidgets.QDialog):
+    math_change_signal = QtCore.pyqtSignal()
+    def __init__(self,caller,parent):
+        super().__init__(parent)
+        self.resize(400,400)
+        self.parent = parent
+        self.caller = caller
+        grid = QtWidgets.QGridLayout()
+        grid.setColumnStretch(1,1) # slider
+        grid.setRowStretch(0,1) # graph
+        grid.setRowStretch(1,1) # choose waveform
+        self.setLayout(grid)
+        self.setModal(False)
+        self.close_signal = False
+        
+        self.phase = WaveformParameter( 'phase', 
+            caller.get_phase, caller.set_phase,
+            0, 359,
+            (lambda i: float(i) ),
+            (lambda f: int(f) ) 
+            )
+        self.cycles = WaveformParameter( 'cycles', 
+            caller.get_cycles, caller.set_cycles,
+            .01, 1000, 
+            (lambda i: math.pow( 10,i/100. ) ),
+            (lambda f: int(math.log10(f)*100) ) 
+            )
+        self.skew = WaveformParameter( 'skew', 
+            caller.get_skew, caller.set_skew,
+            0., 1.,
+            (lambda i: float(i/100.) ),
+            (lambda f: int(f*100) ) 
+            )
+        
+        self.math_change_signal.connect(self.ShowCurve)
+
+        row = 0
+        plot = pg.PlotWidget()
+        plot.setBackground('w') 
+        plot.setXRange(0,360,padding = 0) 
+        plot.setYRange(-1,1,padding = .05)
+        data =  caller.waveform.Read(360)
+        self.real = plot.plot(np.real(data),pen=pg.mkPen(color='k',width=2))
+        self.imag = plot.plot(np.imag(data),pen=pg.mkPen(color='r',width=2))
+        grid.addWidget(plot,row,0,1,3)
+        
+        row += 1
+        grid.addWidget(QtWidgets.QLabel('Waveform',parent),row,0)
+        combo = QtWidgets.QComboBox(parent)
+        for w in WaveformList():
+            m = combo.addItem(w)
+        combo.setCurrentIndex(combo.findText(caller.waveform.name))
+        combo.setEditable(False)
+        combo.currentIndexChanged.connect(lambda w:self.changeWaveform(combo.itemText(w)))
+        grid.addWidget(combo,row,1,1,2)
+        
+            
+        for wp in [ self.phase, self.skew, self.cycles ]:
+            row += 1
+            name = wp.name
+            grid.addWidget(QtWidgets.QLabel(name[:1].upper() + name[1:].lower(),parent),row,0)
+            (left,right) = wp.set_pair(parent,self.math_change_signal)
+            grid.addWidget(left,row,1)
+            grid.addWidget(right,row,2)
+        
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        
+    def changeWaveform( self, w ):
+        self.caller.waveform_select(w)
+        self.ShowCurve()
+    
+    def closeEvent( self, event ):
+        # Make sure WaveformPan knows about our closing
+        self.caller.modeless = None
+        event.accept()
+        
+    def ShowCurve(self):
+        data =  self.caller.waveform.Read(360)
+        self.real.setData(np.real(data))
+        self.imag.setData(np.imag(data))
+        pass
+
+def WaveformList():
+    # generates a list of waveform types
+    modules = [l.__name__ for l in Waveform.List()]
+    if not Flag_random:
+        modules.remove('Random')
+    return modules
+        
 class WaveformPan(PanBlockClass):
     SampleRate = 2.56E6 
     _name = "Waveform"
@@ -569,12 +759,9 @@ class WaveformPan(PanBlockClass):
     def __init__(self):
         self.driver = True
         self.squarewave = False
-        self.modules = [l.__name__ for l in Waveform.List()]
-        if not Flag_random:
-            self.modules.remove('Random')
-        self.phase = 0.
-        self.cycles = 1.
-        self._waveform_select( self.modules[0] )
+        self.waveform_select( WaveformList()[0] )
+
+        self.modeless = None # handle of modeless window
         
     def SetFrequency(self, IF ):
         pass
@@ -585,47 +772,54 @@ class WaveformPan(PanBlockClass):
     def Close(self):
         self.driver = None
     
-    def _waveform_select( self, w ):
+    def waveform_select( self, w ):
         self.module_chosen = w
         self.waveform = Waveform.Match( w )()
         self.name = self.waveform.name
         self.waveform.phase = self.phase 
         self.waveform.cycles = self.cycles 
         
-    def Phase( self, parent ):
-        print(parent)
-        p, ok = QtWidgets.QInputDialog.getDouble( parent, 'Phase Angle', 'Enter in degrees:', self.phase, 0., 360., 2 )
-        if ok:
-            self.waveform.phase = p
-            self.phase = p
+    def get_skew( self ):
+        return self.waveform.skew
+    def set_skew( self, x ):
+        self.waveform.skew = x
+    skew = property( get_skew, set_skew )
         
-    def Cycles( self, parent ):
-        print(parent)
-        c, ok = QtWidgets.QInputDialog.getDouble( parent, 'Cycles', 'Enter repeats:', self.cycles, 0.1 )
-        if ok:
-            self.waveform.cycles = c
-            self.cycles = c
+    def get_cycles( self ):
+        return self.waveform.cycles
+    def set_cycles( self, x ):
+        self.waveform.cycles = x
+    cycles = property( get_cycles, set_cycles )
+        
+    def get_phase( self ):
+        return self.waveform.phase
+    def set_phase( self, x ):
+        self.waveform.phase = x
+    phase = property( get_phase, set_phase )
         
     def Menu( self, menu, parent ):
-        this_menu = super().Menu(menu, parent )
+        this_menu = super().Menu(menu, parent, True )
         
-        waveform = this_menu.addMenu('&Waveform')
-        waveaction = QtWidgets.QActionGroup(waveform)
-        for w in self.modules:
-            m = QtWidgets.QAction('&'+w,waveaction,checkable=True,checked=(w==self.module_chosen))
-            m.triggered.connect(lambda state, x=w: self._waveform_select(x))
-            waveform.addAction(m)
+        this_menu.triggered.connect(lambda state, p=parent: self.Menu_open(p) )
         
-        phase = QtWidgets.QAction('&Phase...',parent)
-        phase.triggered.connect(lambda state, p=parent: self.Phase(p) )
-        this_menu.addAction(phase)
-        
-        cycles = QtWidgets.QAction('&Cycles...',parent)
-        cycles.triggered.connect(lambda state, p=parent: self.Cycles(p) )
-        this_menu.addAction(cycles)
-
 #        this_menu.addAction(waveform)
         return this_menu
+
+    def __del__(self):
+        self.close_modeless()
+
+    def close_modeless( self ):
+        if self.modeless:
+            if self.modeless.isVisible():
+                self.modeless.close()
+            self.modeless = None
+                
+    def Menu_open( self, parent ):
+        if self.modeless:
+            self.close_modeless()
+        else:
+            self.modeless = WaveformControl(self,parent)
+#            WaveformControl.Start( self.waveform_signal, self.skew_signal, self.phase_signal, self.cycles_signal, self.close_signal )
 
 class TransmissionMode(SubclassManager):
     # Signal types
@@ -1114,6 +1308,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             self.Loop(True)
 
     def setAudio( self, index ):
+        # use Audio input
         global AppState
         AppState.panadapter = AudioPan(index)
         if AppState.resetNeeded:
