@@ -21,7 +21,7 @@ import sys
 import signal
 import argparse # for parsing the command line
 
-from scipy.signal import welch, decimate
+import scipy.signal
 import numpy as np
 import pyqtgraph as pg
 
@@ -493,18 +493,29 @@ class Waveform(SubclassManager):
 
         return self.data
         
+class Impulse(Waveform):
+    _name = "Impulse Waveform"
+    def __init__(self):
+        super().__init__()
+        
+    def create(self):
+        cycle_length = int(self._size / self._cycles)
+        hcl = cycle_length // 2
+        for i in range( hcl,self._size,cycle_length ):
+            self.data[i] += 1
+            if i > 0:
+                self.data[i-1] += self._skew
+            if i < self._size-1:
+                self.data[i+1] += self._skew
+                            
 class Square(Waveform):
     _name = "Square Waveform"
     def __init__(self):
         super().__init__()
         
     def create(self):
-        cycle_length = int(self._size / self._cycles)
-        skew_length = cycle_length * self._skew
-
-        for i in range( 0,self._size ):
-            if i % cycle_length <= skew_length:
-                self.data[i] += 1
+        a = np.linspace(0,self._cycles,self._size)
+        self.data[np.mod(a,1)<self._skew] = 1
                             
 class Sawtooth(Waveform):
     _name = "Sawtooth Waveform"
@@ -512,16 +523,15 @@ class Sawtooth(Waveform):
         super().__init__()
         
     def create(self):
-        cycle_length = int(self._size / self._cycles)
         s = self._skew
-        if s < .01:
-            s = .01
-        elif s > .99:
-            s = .99
+        if s < .001:
+            s = .001
+        elif s > .999:
+            s = .999
         p = math.log(.5) / math.log(s)
 
-        for i in range( 0,self._size ):
-            self.data[i] += math.pow((i%cycle_length)/cycle_length,p)
+        a = np.linspace(0,self._cycles,self._size)
+        self.data = np.power(np.mod(a,1),p)
 
 class Triangle(Waveform):
     _name = "Triangle Waveform"
@@ -576,11 +586,8 @@ class Sine(Waveform):
         super().__init__()
         
     def create(self):
-        delta_angle = 2 * np.pi * self._cycles / self._size
-        angle = 0.
-        for i in range(self._size):
-            self.data[i] = np.sin(angle) + np.cos(angle)*1j
-            angle += delta_angle
+        a = np.linspace(0,2*np.pi*self._cycles,self._size)
+        self.data = np.sin(a) + np.cos(a)*1j
 
 class Random(Waveform):
     def __init__(self):
@@ -644,6 +651,7 @@ class WaveformParameter():
         self.left.valueChanged.connect(self.leftChange)
 
         self.right = QtWidgets.QDoubleSpinBox(parent)
+        #self.right.setStepType(QtWidgets.QAbstractSpinBox.AdaptiveDecimalStepType)
         self.right.setRange( self._lower, self._upper )
         self.right.setDecimals(2)
         self.right.valueChanged.connect(self.rightChange)
@@ -742,7 +750,6 @@ class WaveformControl(QtWidgets.QDialog):
         data =  self.caller.waveform.Read(360)
         self.real.setData(np.real(data))
         self.imag.setData(np.imag(data))
-        pass
 
 def WaveformList():
     # generates a list of waveform types
@@ -820,6 +827,191 @@ class WaveformPan(PanBlockClass):
             self.modeless = WaveformControl(self,parent)
 #            WaveformControl.Start( self.waveform_signal, self.skew_signal, self.phase_signal, self.cycles_signal, self.close_signal )
 
+class FFTMenu():
+    def __init__(self):
+        self.modeless = None
+        
+    def __del__(self):
+        self.close_modeless()
+
+    def close_modeless( self ):
+        if self.modeless:
+            if self.modeless.isVisible():
+                self.modeless.close()
+            self.modeless = None
+                
+    def Menu_open( self, parent ):
+        if self.modeless:
+            self.close_modeless()
+        else:
+            self.modeless = FFTControl(self,parent)
+
+class FFTControl(QtWidgets.QDialog):
+    window_list = {
+            'barthann'  :   [],
+            'bartlett'  :   [],
+            'blackmanharris':[],
+            'blackman'  :   [],
+            'bohman'    :   [],
+            'boxcar'    :   [],
+            'flattop'   :   [],
+            'hamming'   :   [],
+            'hann'      :   [],
+            'parzen'    :   [],
+            'nuttall'   :   [],
+            'triang'    :   [],
+            'kaiser'    :   [('beta',14)],
+            'gaussian'  :   [('stndrd dev',7)],
+            'general gaussian':[('power',1.5),('stndrd dev',7)],
+            'slepian'   :   [('bandwidth',.3)],
+            'dpss'      :   [('nrml 1/2 bandwdth',3)],
+            'chebwin'   :   [('atten db',100)],
+            'exponential':  [('decay scale',3)],
+            'tukey'     :   [('taper frac',.3)]
+            }
+    win_size = 51 # points in the window function
+    fft_size = 2048
+
+    def __init__(self,caller,parent):
+        global AppState
+        super().__init__(parent)
+        self.resize(400,500)
+        self.parent = parent
+        self.caller = caller
+        grid = QtWidgets.QGridLayout()
+        grid.setColumnStretch(1,1) # slider
+        grid.setRowStretch(0,1) # graph
+        grid.setRowStretch(1,2) # choose waveform
+        self.setLayout(grid)
+        self.setModal(False)
+        self.close_signal = False
+        
+        row = 0
+        # Window graph
+        self.plot0 = pg.PlotWidget()
+        self.plot0.setBackground('w') 
+        self.plot0.setXRange(0,type(self).win_size-1,padding = 0) 
+        self.plot0.setYRange(0,1,padding = .05)
+        self.plot0.hideAxis('bottom')
+        self.winplot = None
+        grid.addWidget(self.plot0,row,0,1,2)
+        
+        row += 1
+        # FFT graph
+        self.plot1 = pg.PlotWidget()
+        self.plot1.setBackground('w') 
+        self.plot1.setXRange(0,1027,padding = 0) 
+        self.plot1.setYRange(-140,0,padding = .05)
+        self.plot1.hideAxis('bottom')
+        self.plot1.showGrid(x=False,y=True,alpha=.5)
+        self.fftplot = None
+        grid.addWidget(self.plot1,row,0,1,2)
+        
+        row += 1
+        # Window choose
+        grid.addWidget(QtWidgets.QLabel('Window',parent),row,0)
+        self.combo = QtWidgets.QComboBox(parent)
+        for w in sorted(type(self).window_list.keys()):
+            m = self.combo.addItem(w)
+        self.combo.currentIndexChanged.connect(self.NewWin)
+        self.combo.setEditable(False)
+        grid.addWidget(self.combo,row,1)
+        
+        row += 1
+        # Optional parameter 0
+        self.P0text = QtWidgets.QLabel('param1',parent)
+        self.P0val = QtWidgets.QDoubleSpinBox(parent)
+#        self.P0val.setStepType(QtWidgets.QAbstractSpinBox.AdaptiveDecimalStepType)
+        grid.addWidget(self.P0text,row,0)
+        grid.addWidget(self.P0val,row,1)
+        self.P0val.valueChanged.connect(self.ShowCurve)
+        
+        row += 1
+        # Optional parameter 1
+        self.P1text = QtWidgets.QLabel('param2',parent)
+        self.P1val = QtWidgets.QDoubleSpinBox(parent)
+#        self.P1val.setStepType(QtWidgets.QAbstractSpinBox.AdaptiveDecimalStepType)
+        grid.addWidget(self.P1text,row,0)
+        grid.addWidget(self.P1val,row,1)
+        self.P1val.valueChanged.connect(self.ShowCurve)
+        
+        # set current window
+        current_win = AppState.fft_window
+        if isinstance( current_win, tuple ):
+            current_win = current_win[0]
+        indx = self.combo.findText(current_win)
+        if indx < 0:
+            indx = 0
+        self.combo.setCurrentIndex(indx)
+
+        self.show()
+        self.raise_()
+        self.activateWindow()
+    
+    def closeEvent( self, event ):
+        # Make sure WaveformPan knows about our closing
+        self.caller.modeless = None
+        event.accept()
+        
+    def NewWin( self, i ):
+        self.win = self.combo.itemText(i)
+        p = type(self).window_list[self.win]
+        if len(p) == 2:
+            # 2 parameters
+            self.P1text.setText(p[1][0])
+            self.P1val.setValue(p[1][1])
+            self.P1text.setVisible(True)
+            self.P1val.setVisible(True)
+            self.P0text.setText(p[0][0])
+            self.P0val.setValue(p[0][1])
+            self.P0text.setVisible(True)
+            self.P0val.setVisible(True)
+        elif len(p)==1:
+            self.P1text.setVisible(False)
+            self.P1val.setVisible(False)
+            self.P0text.setText(p[0][0])
+            self.P0val.setValue(p[0][1])
+            self.P0text.setVisible(True)
+            self.P0val.setVisible(True)
+        else:
+            self.P1text.setVisible(False)
+            self.P1val.setVisible(False)
+            self.P0text.setVisible(False)
+            self.P0val.setVisible(False)
+        self.ShowCurve()
+
+    def ShowCurve(self):
+        global AppState
+        
+        # find window and possible parameters
+        # and set globally in AppState 
+        p = type(self).window_list[self.win]
+        if len(p) == 2:
+            p1 = self.P1val.value()
+            p0 = self.P0val.value()
+            AppState.fft_window = (self.win,p0,p1)
+        elif len(p) == 1:
+            p0 = self.P0val.value()
+            AppState.fft_window = (self.win,p0)
+        else:
+            AppState.fft_window = self.win
+            
+        # get window shape and plot
+        windata = scipy.signal.get_window(AppState.fft_window,51)
+        if self.winplot:
+            self.winplot.setData(windata)
+        else:
+            self.winplot = self.plot0.plot(windata,pen=pg.mkPen(color='k',width=2))
+            
+        # get fft and plot
+        fft = np.fft.fft(windata, 2048) / (len(windata)/2.0)
+#        winfft = 20 * np.log10(np.abs(np.fft.fftshift(fft / np.max(np.abs(fft)))))
+        winfft = 20 * np.log10(np.abs(fft / np.max(np.abs(fft))))
+        if self.fftplot:
+            self.fftplot.setData(winfft)
+        else:
+            self.fftplot = self.plot1.plot(winfft,pen=pg.mkPen(color='k',width=2))
+                
 class TransmissionMode(SubclassManager):
     # Signal types
     _changed = False
@@ -989,6 +1181,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
 
         self.scroll = -1
         
+        self.fftmenu = FFTMenu()
         self.init_image()
         self.makeMenu()
 
@@ -1129,31 +1322,10 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         viewmenu = menu.addMenu('&View')
         Panels.addMenus( viewmenu, self )
 
-        fftmenu = menu.addMenu('&Spectrum')
-        win_type = fftmenu.addMenu('FFT &window')
-        win_action_group = QtWidgets.QActionGroup(win_type)
-        for w in [
-            'barthann',
-            'bartlett',
-            'blackmanharris',
-            'blackman',
-            'bohman',
-            'boxcar',
-            'flattop',
-            'hamming',
-            'hann',
-            'parzen',
-            'nuttall',
-            'triang'
-            ]:
-            m = QtWidgets.QAction('&'+w,win_action_group,checkable=True,checked=(AppState.fft_window==w))
-            m.triggered.connect(lambda state, win=w: AppState.setWindow(win))
-            win_type.addAction(m)
-        # make sure at least one is chosen
-        if not win_action_group.checkedAction():
-            AppState.setWindow('hamming')
-            
-        
+        spectrummenu = menu.addMenu('&Spectrum')
+        fftwindow = QtWidgets.QAction('FFT &Window',self)
+        spectrummenu.addAction(fftwindow)
+        fftwindow.triggered.connect(lambda state, s=self: self.fftmenu.Menu_open(s))
 
     def remakePanMenu( self ):
         self.panmenu.clear()
@@ -1435,7 +1607,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         
         power2 = int(np.log2(ratio))
         for mult in range(power2):
-            x_mix = decimate(x_mix, 2) # mix and decimate
+            x_mix = scipy.signal.decimate(x_mix, 2) # mix and decimate
 
         return x_mix 
 
@@ -1448,7 +1620,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         if self.fft_ratio>1:
             chunk = self.zoomfft(chunk, self.fft_ratio)
 
-        sample_freq, spec = welch(chunk, AppState.panadapter.SampleRate, window=AppState.fft_window, nperseg=FFT_SIZE,  nfft=FFT_SIZE)
+        sample_freq, spec = scipy.signal.welch(chunk, AppState.panadapter.SampleRate, window=AppState.fft_window, nperseg=FFT_SIZE,  nfft=FFT_SIZE)
         spec = np.roll(spec, FFT_SIZE//2, 0)[FFT_SIZE//2-self.N_WIN//2:FFT_SIZE//2+self.N_WIN//2]
         
         # get magnitude 
