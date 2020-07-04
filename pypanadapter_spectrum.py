@@ -22,6 +22,7 @@ import signal
 import argparse # for parsing the command line
 
 import scipy.signal
+import scipy.special
 import numpy as np
 import pyqtgraph as pg
 
@@ -494,7 +495,7 @@ class Waveform(SubclassManager):
         return self.data
         
 class Impulse(Waveform):
-    _name = "Impulse Waveform"
+    _name = "Impulse"
     def __init__(self):
         super().__init__()
         
@@ -509,7 +510,7 @@ class Impulse(Waveform):
                 self.data[i+1] += self._skew
                             
 class Square(Waveform):
-    _name = "Square Waveform"
+    _name = "Square wave"
     def __init__(self):
         super().__init__()
         
@@ -517,8 +518,50 @@ class Square(Waveform):
         a = np.linspace(0,self._cycles,self._size)
         self.data[np.mod(a,1)<self._skew] = 1
                             
+class J0Bessel(Waveform):
+    _name = "J0 Bessel"
+    def __init__(self):
+        super().__init__()
+        
+    def create(self):
+        s = self._skew
+        if s < .01:
+            s = .01
+        L = 10./s
+        a = np.mod(np.linspace(0,self._cycles*L,self._size),L)
+        self.data = scipy.special.jv(0,a)
+                            
+class J1Bessel(Waveform):
+    _name = "J1 Bessel"
+    def __init__(self):
+        super().__init__()
+        
+    def create(self):
+        s = self._skew
+        if s < .01:
+            s = .01
+        L = 10./s
+        a = np.mod(np.linspace(0,self._cycles*L,self._size),L)
+        self.data = scipy.special.jv(1,a)
+                            
+class Logit(Waveform):
+    _name = "Logit (x^p*(1-x^q)"
+    def __init__(self):
+        super().__init__()
+        
+    def create(self):
+        p = self._skew
+        if p < .01:
+            p = .01
+        if p > .99:
+            p = .99
+        q = 1 - p
+        mx = p*math.pow(q,q/p)
+        a = np.mod(np.linspace(0,self._cycles,self._size),1)
+        self.data = a**q * ( 1 - a**p ) / mx
+                            
 class Sawtooth(Waveform):
-    _name = "Sawtooth Waveform"
+    _name = "Sawtooth"
     def __init__(self):
         super().__init__()
         
@@ -534,7 +577,7 @@ class Sawtooth(Waveform):
         self.data = np.power(np.mod(a,1),p)
 
 class Triangle(Waveform):
-    _name = "Triangle Waveform"
+    _name = "Triangles"
     def __init__(self):
         super().__init__()
         
@@ -556,8 +599,8 @@ class Triangle(Waveform):
                 else:
                     self.data[i] += (cycle_length - x) / (cycle_length - skew_length)
 
-class Digits(Waveform):
-    _name = "Digit Waveform"
+class Bits(Waveform):
+    _name = "Bits"
     def __init__(self):
         super().__init__()
         
@@ -579,9 +622,44 @@ class Digits(Waveform):
 
         # normalize
         self.data /= mx
+
+class Totient(Waveform):
+    _name = "Euler's Totient"
+    def __init__(self):
+        super().__init__()
         
+    def create(self):
+
+        cycle_length = int( self._size / self._cycles )
+
+        # Python 3 program to calculate Euler's Totient Function using Euler's product formula 
+        # This code is based on an example by Nikita Tiwari. 
+
+        for i in range(self._size):
+            n = ( i % cycle_length ) + 1 # Offset to avoid 0
+            result = n # Initialize result as n 
+            
+            # Consider all prime factors of n and for every prime factor p, multiply result with (1 - 1 / p) 
+            p = 2
+            while p * p <= n : 
+                # Check if p is a prime factor. 
+                if n % p == 0 : 
+                    # If yes, then update n and result 
+                    while n % p == 0 : 
+                        n //= p 
+                    result *= (1.0 - (1.0 / p)) 
+                p += 1
+                
+                
+            # If n has a prime factor greater than sqrt(n) 
+            # (There can be at-most one such prime factor) 
+            if n > 1 : 
+                result *= (1.0 - (1.0 / n)) 
+
+            self.data[i] = result / cycle_length
+    
 class Sine(Waveform):
-    _name = "Sine Waveform"
+    _name = "Sine wave"
     def __init__(self):
         super().__init__()
         
@@ -590,6 +668,7 @@ class Sine(Waveform):
         self.data = np.sin(a) + np.cos(a)*1j
 
 class Random(Waveform):
+    _name = "Random"
     def __init__(self):
         super().__init__()
         
@@ -666,10 +745,12 @@ class WaveformParameter():
         self.right.setValue(value)
 
 class WaveformControl(QtWidgets.QDialog):
+    default_x_loc = 0 # startup screen location
     math_change_signal = QtCore.pyqtSignal()
     def __init__(self,caller,parent):
         super().__init__(parent)
         self.resize(400,400)
+        self.move(type(self).default_x_loc,parent.size().height())
         self.parent = parent
         self.caller = caller
         grid = QtWidgets.QGridLayout()
@@ -758,16 +839,37 @@ def WaveformList():
         modules.remove('Random')
     return modules
         
-class WaveformPan(PanBlockClass):
+class ModelessMenu():
+    def __init__(self):
+        self.modeless = None
+        # subclasses must define MenuControl
+        
+    def __del__(self):
+        self.close_modeless()
+
+    def close_modeless( self ):
+        if self.modeless:
+            if self.modeless.isVisible():
+                self.modeless.close()
+            self.modeless = None
+                
+    def Menu_open( self, parent ):
+        if self.modeless:
+            self.close_modeless()
+        else:
+            self.modeless = self.MenuControl(self,parent)
+
+class WaveformPan(PanBlockClass,ModelessMenu):
     SampleRate = 2.56E6 
     _name = "Waveform"
 
     def __init__(self):
         self.driver = True
         self.squarewave = False
-        self.waveform_select( WaveformList()[0] )
+        self.waveform_select( sorted(WaveformList())[0] )
 
-        self.modeless = None # handle of modeless window
+        self.MenuControl = WaveformControl
+        self.modeless = None # Should call super__init__
         
     def SetFrequency(self, IF ):
         pass
@@ -811,42 +913,13 @@ class WaveformPan(PanBlockClass):
 #        this_menu.addAction(waveform)
         return this_menu
 
-    def __del__(self):
-        self.close_modeless()
-
-    def close_modeless( self ):
-        if self.modeless:
-            if self.modeless.isVisible():
-                self.modeless.close()
-            self.modeless = None
-                
-    def Menu_open( self, parent ):
-        if self.modeless:
-            self.close_modeless()
-        else:
-            self.modeless = WaveformControl(self,parent)
-#            WaveformControl.Start( self.waveform_signal, self.skew_signal, self.phase_signal, self.cycles_signal, self.close_signal )
-
-class FFTMenu():
+class FFTMenu(ModelessMenu):
     def __init__(self):
-        self.modeless = None
-        
-    def __del__(self):
-        self.close_modeless()
-
-    def close_modeless( self ):
-        if self.modeless:
-            if self.modeless.isVisible():
-                self.modeless.close()
-            self.modeless = None
-                
-    def Menu_open( self, parent ):
-        if self.modeless:
-            self.close_modeless()
-        else:
-            self.modeless = FFTControl(self,parent)
+        self.MenuControl = FFTControl
+        super().__init__()
 
 class FFTControl(QtWidgets.QDialog):
+    default_x_loc = 400 # startup screeen location
     window_list = {
             'barthann'  :   [],
             'bartlett'  :   [],
@@ -876,6 +949,7 @@ class FFTControl(QtWidgets.QDialog):
         global AppState
         super().__init__(parent)
         self.resize(400,500)
+        self.move(type(self).default_x_loc,parent.size().height())
         self.parent = parent
         self.caller = caller
         grid = QtWidgets.QGridLayout()
@@ -1158,7 +1232,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
     refresh = 50 # default refresh timer in msec
 
     def __init__(self ):
-        # Comes in with Panadapter set and readio_class set.
+        # Comes in with Panadapter set and radio_class set.
         global AppState
         
         self.radio_class = AppState.radio_class # The radio
