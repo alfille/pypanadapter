@@ -287,17 +287,17 @@ class RTLSDR(PanBlockClass):
 
         try:
             if self.serial:
-                self.driver = RtlSdr(serial_number = self.serial)
+                self.driver = rtlsdr.RtlSdr(serial_number = self.serial)
                 self._name = f'RTLSDR serial {serial}'
             elif self.index:
-                self.driver = RtlSdr(self.index)
-                self._name = f'RTLSDR index {serial}'
+                self.driver = rtlsdr.RtlSdr(self.index)
+                self._name = f'RTLSDR index {index}'
             elif self.host:
-                self.driver = RtlSdrTcpClient( hostname=self.host, port=self.port ) 
+                self.driver = rtlsdr.RtlSdrTcpClient( hostname=self.host, port=self.port ) 
                 self._name = f'RTLSDR @{host}:{port}'
             else:
-                self.driver = RtlSdr()
-                self_name = 'RTLSDR'
+                self.driver = rtlsdr.RtlSdr()
+                self._name = 'RTLSDR'
         except:
             print("RTLSDR not found")
             self.driver = None
