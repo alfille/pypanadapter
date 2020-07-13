@@ -61,7 +61,7 @@ except:
     print("Could not find pyusb module\n\trun <pip3 pyusb>\n\tsee https://github.com/pyusb/pyusb")
     Flag_USB = False
     
-FFT_SIZE = 2048
+FFT_SIZE = 2048 # initial size
 FRAME_RATE = 8 # data refesh rate in Hz
 
 class SubclassManager():
@@ -117,24 +117,92 @@ class TS480(Radio):
     # Intermediate Frquency
     IF = 73.095E6
 
-class Custom(Radio):
-    make = "Custom"
+class CustomRadio(Radio):
+    make = "CustomRadio"
     model = "Specified"
     # Intermediate Frquency
     def __init(self,IF):
         self.IF = IF
 
+# Subclass pyqtgraph context menus
+# Referehce: https://groups.google.com/forum/#!topic/pyqtgraph/3jWiatJPilc
+# by Morgan Cherioux
 
+class CustomRadioViewBox(pg.ViewBox):
+    signalShowT0 = QtCore.Signal()
+    signalShowS0 = QtCore.Signal()
+
+    def __init__(self, parent=None, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.setRectMode() # Set mouse mode to rect for convenient zooming
+        self.menu = None # Override pyqtgraph ViewBoxMenu
+        self.menu = self.getMenu() # Create the menu
+
+    def raiseContextMenu(self, ev):
+        print("Context",ev)
+        if not self.menuEnabled():
+            return
+        menu = self.getMenu()
+        pos  = ev.screenPos()
+        menu.popup(QtCore.QPoint(pos.x(), pos.y()))
+
+    def getMenu(self):
+        if self.menu is None:
+            self.menu = QtGui.QMenu()
+#            self.viewAll = QtGui.QAction("Vue d\'ensemble", self.menu)
+#            self.viewAll.triggered.connect(self.autoRange)
+#            self.menu.addAction(self.viewAll)
+            self.leftMenu = QtGui.QMenu("Left click")
+            group = QtGui.QActionGroup(self)
+            pan = QtGui.QAction(u'Move', self.leftMenu)
+            zoom = QtGui.QAction(u'Zoom', self.leftMenu)
+            self.leftMenu.addAction(pan)
+            self.leftMenu.addAction(zoom)
+            pan.triggered.connect(self.setPanMode)
+            zoom.triggered.connect(self.setRectMode)
+            pan.setCheckable(True)
+            zoom.setCheckable(True)
+            pan.setActionGroup(group)
+            zoom.setActionGroup(group)
+            self.menu.addMenu(self.leftMenu)
+            self.menu.addSeparator()
+            self.showT0 = QtGui.QAction(u'Amplitude markers', self.menu)
+            self.showT0.triggered.connect(self.emitShowT0)
+            self.showT0.setCheckable(True)
+            self.showT0.setEnabled(False)
+            self.menu.addAction(self.showT0)
+            self.showS0 = QtGui.QAction(u'Integration zone', self.menu)
+            self.showS0.setCheckable(True)
+            self.showS0.triggered.connect(self.emitShowS0)
+            self.showS0.setEnabled(False)
+            self.menu.addAction(self.showS0)
+        return self.menu
+
+    def emitShowT0(self):
+        self.signalShowT0.emit()
+
+    def emitShowS0(self):
+        self.signalShowS0.emit()
+
+    def setRectMode(self):
+        self.setMouseMode(self.RectMode)
+
+    def setPanMode(self):
+        self.setMouseMode(self.PanMode)
+
+class PltWidget(pg.PlotWidget):
+    """
+    Subclass of PlotWidget
+    """
+    def __init__(self, parent=None, **kwargs):
+        super().__init__(parent, viewBox=CustomRadioViewBox(), **kwargs )
 
 class PanClass(SubclassManager):
     # Pan adapter device including RTLSDR
     _name = "Panadapter"
     def __init(self):
+        print("Pan class")
         self.driver = None
-        
-    @property
-    def N_AVG(self):
-        return int(self.SampleRate / FFT_SIZE / FRAME_RATE )
         
     @property
     def name( self ):
@@ -170,19 +238,32 @@ class PanStreamClass(PanClass):
     # All PanAdapters that stream Data
     _name = "None"
     Mode = 'Stream'
+    
+    # Stream is a continuous flow of data, with a notification technique (callback)
+    # self.driver identifies the device
+    # self.stream is the actual stream
+    # Needs to be updated when chuck size changed ( usually stopped and restarted )
 
-    def __init(self):
+    def __init__(self):
         super().__init__()
+        self.stream = None
+        self.chunk_size = 0
         
+    def stream_open( self ):
+        print("Implementation Error: stream_open routine not defined for Panadapter ",self.name)
+
+    def stream_close( self ):
+        print("Implementation Error: stream_close routine not defined for Panadapter ",self.name)
+
     def Stream( self, update_signal , chunk_size ) :
         self.update_signal = update_signal
         self.chunk_size = chunk_size
-        self.StartStream()
 
-    def emitter( self, data ):
-        # sends data to Application Display
-        self.update_signal.emit( data )
-                
+        if self.stream:
+            # close an existing stream
+            self.stream_close()
+        self.stream = self.stream_open()
+        
 class PanBlockClass(PanClass):
     # All PanAdapters that stream Data
     _name = "None"
@@ -355,44 +436,42 @@ class AudioPan(PanStreamClass):
     _name = "Audio"
     def __init__(self,index):
         global AppState
+        super().__init__()
+
         if not Flag_audio:
-            self.driver = None
             return
         if AppState.audio:
-            self.driver = None
             try:
                 info = AppState.audio.get_device_info_by_index( index)
                 self._name = info['name']
                 self.SampleRate = info['defaultSampleRate']
-                self.driver = 'quiet'
+                self.driver = index
             except:
                 print("Could not open audio device")
-                
-        self.index = index
     
-    def Stream( self, update_function , chunk_size ) :
+    def stream_open( self ):
         if not self.driver:
-            return
+            return None
         try:
-            self.driver = AppState.audio.open(
+            stream = AppState.audio.open(
                 format=pyaudio.paFloat32,
                 channels=1,
-                frames_per_buffer=chunk_size,
+                frames_per_buffer=self.chunk_size,
                 rate=int(self.SampleRate),
                 input=True,
                 output=False,
                 stream_callback = self.audio_callback,
-                input_device_index = self.index
+                input_device_index = self.driver
                 )
+            return stream
         except:
-            self.driver = None
-            print(self.name,"Could not start audio streaming")
-        super().Stream( update_function, chunk_size )
+            return None
 
-    def StartStream( self ) :
-        if self.driver:
-            self.driver.start_stream()
-        
+    def stream_close( self ):
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+
     def __del__(self):
         if self.driver:
             self.driver.close()
@@ -401,7 +480,7 @@ class AudioPan(PanStreamClass):
         self.center_freq = IF
         
     def audio_callback( self, in_data, frame_count, time_info, status_flags ):
-        self.emitter( np.frombuffer( in_data, 'float32' ) ) 
+        self.update_signal.emit( np.frombuffer( in_data, 'float32' ) ) 
         return (None, pyaudio.paContinue)
 
     def Close(self):
@@ -658,6 +737,23 @@ class Totient(Waveform):
 
             self.data[i] = result / cycle_length
     
+class Distance(Waveform):
+    _name = "Distance to Power"
+    def __init__(self):
+        super().__init__()
+        
+    def create(self):
+        cycle_length = int( self._size / self._cycles )
+        
+        a = np.linspace(1,self._size+1,self._size+1)
+        p = a ** (1 + self._skew)
+        a = np.mod(a[:self._size],cycle_length)
+
+        self.data = p[np.searchsorted(p,a)]-a
+
+        mx = np.max(self.data)
+        self.data /= mx
+    
 class Sine(Waveform):
     _name = "Sine wave"
     def __init__(self):
@@ -750,7 +846,6 @@ class WaveformControl(QtWidgets.QDialog):
     def __init__(self,caller,parent):
         super().__init__(parent)
         self.resize(400,400)
-        self.move(type(self).default_x_loc,parent.size().height())
         self.parent = parent
         self.caller = caller
         grid = QtWidgets.QGridLayout()
@@ -758,8 +853,6 @@ class WaveformControl(QtWidgets.QDialog):
         grid.setRowStretch(0,1) # graph
         grid.setRowStretch(1,1) # choose waveform
         self.setLayout(grid)
-        self.setModal(False)
-        self.close_signal = False
         
         self.phase = WaveformParameter( 'phase', 
             caller.get_phase, caller.set_phase,
@@ -811,11 +904,7 @@ class WaveformControl(QtWidgets.QDialog):
             (left,right) = wp.set_pair(parent,self.math_change_signal)
             grid.addWidget(left,row,1)
             grid.addWidget(right,row,2)
-        
-        self.show()
-        self.raise_()
-        self.activateWindow()
-        
+                
     def changeWaveform( self, w ):
         self.caller.waveform_select(w)
         for wp in [ self.phase, self.skew, self.cycles ]:
@@ -823,6 +912,7 @@ class WaveformControl(QtWidgets.QDialog):
         self.ShowCurve()
     
     def closeEvent( self, event ):
+        # Window closed directly
         # Make sure WaveformPan knows about our closing
         self.caller.modeless = None
         event.accept()
@@ -840,7 +930,9 @@ def WaveformList():
     return modules
         
 class ModelessMenu():
-    def __init__(self):
+    # Controls a modeless menu -- create, destroy, positioning
+    def __init__( self, MenuControl ):
+        self.MenuControl = MenuControl # Class of dialog control
         self.modeless = None
         # subclasses must define MenuControl
         
@@ -858,6 +950,15 @@ class ModelessMenu():
             self.close_modeless()
         else:
             self.modeless = self.MenuControl(self,parent)
+            self.modeless.setModal(False)
+            try:
+                x_loc = type(self.modeless).default_x_loc
+            except NameError:
+                x_loc = 0
+            self.modeless.move(x_loc,parent.geometry().bottom())
+            self.modeless.show()
+            self.modeless.raise_()
+            self.modeless.activateWindow()
 
 class WaveformPan(PanBlockClass,ModelessMenu):
     SampleRate = 2.56E6 
@@ -868,9 +969,9 @@ class WaveformPan(PanBlockClass,ModelessMenu):
         self.squarewave = False
         self.waveform_select( sorted(WaveformList())[0] )
 
-        self.MenuControl = WaveformControl
-        self.modeless = None # Should call super__init__
-        
+        # Circumvent python heirachy madness
+        ModelessMenu.__init__( self, WaveformControl )
+
     def SetFrequency(self, IF ):
         pass
         
@@ -913,14 +1014,13 @@ class WaveformPan(PanBlockClass,ModelessMenu):
 #        this_menu.addAction(waveform)
         return this_menu
 
-class FFTMenu(ModelessMenu):
+class   FFTTaperingMenu  (ModelessMenu):
     def __init__(self):
-        self.MenuControl = FFTControl
-        super().__init__()
+        super().__init__(FFTTaperingControl)
 
-class FFTControl(QtWidgets.QDialog):
-    default_x_loc = 400 # startup screeen location
-    window_list = {
+class   FFTTaperingControl (QtWidgets.QDialog):
+    default_x_loc = 800 # startup screeen location
+    taper_list = {
             'barthann'  :   [],
             'bartlett'  :   [],
             'blackmanharris':[],
@@ -942,14 +1042,13 @@ class FFTControl(QtWidgets.QDialog):
             'exponential':  [('decay scale',3)],
             'tukey'     :   [('taper frac',.3)]
             }
-    win_size = 51 # points in the window function
+    taper_size = 51 # points in the window function
     fft_size = 2048
 
     def __init__(self,caller,parent):
         global AppState
         super().__init__(parent)
         self.resize(400,500)
-        self.move(type(self).default_x_loc,parent.size().height())
         self.parent = parent
         self.caller = caller
         grid = QtWidgets.QGridLayout()
@@ -957,22 +1056,20 @@ class FFTControl(QtWidgets.QDialog):
         grid.setRowStretch(0,1) # graph
         grid.setRowStretch(1,2) # choose waveform
         self.setLayout(grid)
-        self.setModal(False)
-        self.close_signal = False
         
         row = 0
-        # Window graph
-        self.plot0 = pg.PlotWidget()
+        # Taper graph
+        self.plot0 = PltWidget() # for custom context window
         self.plot0.setBackground('w') 
-        self.plot0.setXRange(0,type(self).win_size-1,padding = 0) 
+        self.plot0.setXRange(0,type(self).taper_size-1,padding = 0) 
         self.plot0.setYRange(0,1,padding = .05)
         self.plot0.hideAxis('bottom')
-        self.winplot = None
+        self.taperplot = None
         grid.addWidget(self.plot0,row,0,1,2)
         
         row += 1
         # FFT graph
-        self.plot1 = pg.PlotWidget()
+        self.plot1 = PltWidget() # for custom context window
         self.plot1.setBackground('w') 
         self.plot1.setXRange(0,1027,padding = 0) 
         self.plot1.setYRange(-140,0,padding = .05)
@@ -982,12 +1079,12 @@ class FFTControl(QtWidgets.QDialog):
         grid.addWidget(self.plot1,row,0,1,2)
         
         row += 1
-        # Window choose
-        grid.addWidget(QtWidgets.QLabel('Window',parent),row,0)
+        # Taper choose
+        grid.addWidget(QtWidgets.QLabel('Taper function',parent),row,0)
         self.combo = QtWidgets.QComboBox(parent)
-        for w in sorted(type(self).window_list.keys()):
+        for w in sorted(type(self).taper_list.keys()):
             m = self.combo.addItem(w)
-        self.combo.currentIndexChanged.connect(self.NewWin)
+        self.combo.currentIndexChanged.connect(self.NewTaper)
         self.combo.setEditable(False)
         grid.addWidget(self.combo,row,1)
         
@@ -1009,27 +1106,23 @@ class FFTControl(QtWidgets.QDialog):
         grid.addWidget(self.P1val,row,1)
         self.P1val.valueChanged.connect(self.ShowCurve)
         
-        # set current window
-        current_win = AppState.fft_window
-        if isinstance( current_win, tuple ):
-            current_win = current_win[0]
-        indx = self.combo.findText(current_win)
+        # set current taper
+        current_taper = AppState.fft_tapering
+        if isinstance( current_taper, tuple ):
+            current_taper = current_taper[0]
+        indx = self.combo.findText(current_taper)
         if indx < 0:
             indx = 0
         self.combo.setCurrentIndex(indx)
-
-        self.show()
-        self.raise_()
-        self.activateWindow()
     
     def closeEvent( self, event ):
-        # Make sure WaveformPan knows about our closing
+        # Window closed directly
         self.caller.modeless = None
         event.accept()
         
-    def NewWin( self, i ):
-        self.win = self.combo.itemText(i)
-        p = type(self).window_list[self.win]
+    def NewTaper( self, i ):
+        self.taper = self.combo.itemText(i)
+        p = type(self).taper_list[self.taper]
         if len(p) == 2:
             # 2 parameters
             self.P1text.setText(p[1][0])
@@ -1057,35 +1150,94 @@ class FFTControl(QtWidgets.QDialog):
     def ShowCurve(self):
         global AppState
         
-        # find window and possible parameters
+        # find taper and possible parameters
         # and set globally in AppState 
-        p = type(self).window_list[self.win]
+        p = type(self).taper_list[self.taper]
         if len(p) == 2:
             p1 = self.P1val.value()
             p0 = self.P0val.value()
-            AppState.fft_window = (self.win,p0,p1)
+            AppState.fft_tapering = (self.taper,p0,p1)
         elif len(p) == 1:
             p0 = self.P0val.value()
-            AppState.fft_window = (self.win,p0)
+            AppState.fft_tapering = (self.taper,p0)
         else:
-            AppState.fft_window = self.win
+            AppState.fft_tapering = self.taper
             
-        # get window shape and plot
-        windata = scipy.signal.get_window(AppState.fft_window,51)
-        if self.winplot:
-            self.winplot.setData(windata)
+        # get taper shape and plot
+        taperdata = scipy.signal.get_window(AppState.fft_tapering,51)
+        if self.taperplot:
+            self.taperplot.setData(taperdata)
         else:
-            self.winplot = self.plot0.plot(windata,pen=pg.mkPen(color='k',width=2))
+            self.taperplot = self.plot0.plot(taperdata,pen=pg.mkPen(color='k',width=2))
             
         # get fft and plot
-        fft = np.fft.fft(windata, 2048) / (len(windata)/2.0)
-#        winfft = 20 * np.log10(np.abs(np.fft.fftshift(fft / np.max(np.abs(fft)))))
-        winfft = 20 * np.log10(np.abs(fft / np.max(np.abs(fft))))
+        fft = np.fft.fft(taperdata, 2048) / (len(taperdata)/2.0)
+#        taperfft = 20 * np.log10(np.abs(np.fft.fftshift(fft / np.max(np.abs(fft)))))
+        taperfft = 20 * np.log10(np.abs(fft / np.max(np.abs(fft))))
         if self.fftplot:
-            self.fftplot.setData(winfft)
+            self.fftplot.setData(taperfft)
         else:
-            self.fftplot = self.plot1.plot(winfft,pen=pg.mkPen(color='k',width=2))
+            self.fftplot = self.plot1.plot(taperfft,pen=pg.mkPen(color='k',width=2))
                 
+class   FFTSizeMenu  (ModelessMenu):
+    def __init__(self):
+        super().__init__(FFTSizeControl)
+
+class   FFTSizeControl (QtWidgets.QDialog):
+    default_x_loc = 400 # startup screeen location
+
+    def __init__(self,caller,parent):
+        global AppState
+        super().__init__(parent)
+        self.resize(400,200)
+        self.parent = parent
+        self.caller = caller
+
+        form = QtWidgets.QFormLayout()
+        
+        self.fft_size = self.combo( [2**i for i in range(5,16)], AppState.fft_size )
+        self.fft_size.currentIndexChanged.connect(self.set_fft_size)
+        form.addRow('FFT &Size',self.fft_size)
+        
+        self.fft_avg = self.combo( [2**i for i in range(0,9)], AppState.fft_avg )
+        self.fft_avg.currentIndexChanged.connect(self.set_fft_avg)
+        form.addRow('FFT &Averaged',self.fft_avg)
+        
+        self.setLayout(form)
+    
+    def set_value( self, box, value ):
+        # Find a value in the sorted value list
+        lst = [int(box.itemText(i)) for i in range(box.count()) ]
+        i = np.searchsorted( lst, value )
+        if i == box.count():
+            i -= 1
+        box.setCurrentIndex(i)
+        
+    def set_fft_size(self, i ):
+        global AppState
+        old_size = AppState.fft_size
+        AppState.fft_size = int(self.fft_size.currentText())
+        # Make avg compensate
+        self.set_value( self.fft_avg, AppState.fft_avg * old_size / AppState.fft_size )
+        self.parent.fft_change_signal.emit()
+    
+    def set_fft_avg(self, i ):
+        global AppState
+        AppState.fft_avg = int(self.fft_avg.currentText())
+        self.parent.fft_change_signal.emit()
+    
+    def combo(self, valuelist, default ):
+        c = QtWidgets.QComboBox(self.parent)
+        c.setEditable(False)
+        c.addItems([str(x) for x in valuelist])
+        self.set_value( c , default )
+        return c
+
+    def closeEvent( self, event ):
+        # Window closed directly
+        self.caller.modeless = None
+        event.accept()
+        
 class TransmissionMode(SubclassManager):
     # Signal types
     _changed = False
@@ -1138,7 +1290,13 @@ class ProgramState:
         self._resetNeeded = False
         self._Loop = True # for initial entry into loop
         self._soapylist = {}
-        self.fft_window='hamming'
+        self.fft_tapering='hamming'
+
+        self.fft_size = FFT_SIZE
+        self.fft_avg = 128
+        self.scroll = 1 # waterfall direction
+        self.fft_ratio = 2
+
         self.discover = None
         if Flag_audio:
             sys.stderr.write("\n--------------------------------------------------------\n\tSetup output from PyAudio follows -- usually can be ignored\n")
@@ -1147,9 +1305,6 @@ class ProgramState:
         else:
             self.audio = None
             
-    def setWindow( self, win ):
-        self.fft_window = win
-
     @property
     def Loop(self):
         l = self._Loop
@@ -1188,6 +1343,9 @@ class ProgramState:
             self._resetNeeded = True
         self._panadapter = panadapter
         
+        # Set Averaging from Sample rate
+        self.fft_avg = int( panadapter.SampleRate / self.fft_size / FRAME_RATE )
+        
     def SoapyAdd( self, address, port, name ):
         #print("add",address,port,name)
         self._soapylist[(address,port)] = name
@@ -1219,6 +1377,114 @@ class ProgramState:
 #global
 AppState = ProgramState()
 
+class Waterfall(pg.ImageItem):    
+    Colors = {
+    'Default' : ([0,.4,1.],[[0,0,90,255], [200,2020,0,255], [255,0,0,255]]) ,
+    'Matrix' : ([0., 1.],[[0,0,0,255], [0,255,0,255]]) ,
+    'Red Green' : ([0., 0.5, 1.],[[0,0,0,255], [0,255,0,255], [255,0,0,255]]) ,
+    'Tropical' : ([0.,.2,.4,.6,.8,1.],[[68,40,153,255],[222,68,252,255],[252,38,99,255],[252,181,38,255],[86,235,49,255],[3,71,7,255]]) ,
+    }
+
+    def __init__(self):
+        global AppState
+        super().__init__()
+        
+        self.fftwidth = 0
+        
+        self.minlev = -220
+        self.maxlev = -120
+
+        # set colormap
+        self.lookuptable('Default')
+        self.setLevels([self.minlev, self.maxlev])
+
+        # setup the correct scaling for x-axis
+#        self.setLabel('bottom', 'Frequency', units='kHz')
+        
+#        self.text_leftlim = pg.TextItem("-%.1f kHz"%(bw_hz*self.N_WIN/2.))
+#        self.text_leftlim.setParentItem(self.waterfall)
+#        self.plotwidget1.addItem(self.text_leftlim)
+#        self.text_leftlim.setPos(0, 0)
+
+#        self.text_rightlim = pg.TextItem("+%.1f kHz"%(bw_hz*self.N_WIN/2.))
+#        self.text_rightlim.setParentItem(self.waterfall)
+#        self.plotwidget1.addItem(self.text_rightlim)
+#        self.text_rightlim.setPos(bw_hz*(self.N_WIN-64), 0)
+
+    @QtCore.pyqtSlot(str)
+    def lookuptable( self, choice ):
+        if choice not in type(self).Colors:
+            choice = 'Default'
+
+        (p,c) = type(self).Colors[choice]
+        pos = np.array(p)
+        color = np.array(c, dtype=np.ubyte)
+
+        cmap = pg.ColorMap(pos, color)
+        self.setLookupTable(cmap.getLookupTable(0.0, 1.0, 256))
+
+    def init_image(self):
+        global AppState
+
+        bw_hz = AppState.panadapter.SampleRate/AppState.fft_size * self.fftwidth/1.e6/AppState.fft_ratio
+        self.scale(bw_hz,1)
+
+        self.img_array = -500*np.ones((self.fftwidth//4, self.fftwidth))
+        # Plot the grid
+        for x in [0, self.fftwidth//2, self.fftwidth-1]:
+            if x==0 or x==self.fftwidth-1:
+                self.img_array[:,x] = 0
+        
+
+    def image_update(self, psd):
+        global AppState
+        fftwidth = np.size(psd)
+        
+        if fftwidth != self.fftwidth :
+            self.fftwidth = fftwidth
+            self.init_image()
+        
+        # grid
+        for x in [0, fftwidth//2, fftwidth-1]:
+            psd[x] = 0            
+
+        # roll down one and replace leading edge with new data
+        self.img_array[-1:] = psd
+        self.img_array = np.roll(self.img_array, -AppState.scroll, 0)
+
+
+        for i, x in enumerate(range(0, fftwidth-1, (fftwidth//10))):
+            if i!=5 and i!=10:
+                if AppState.scroll>0:
+                    for y in range(5,15):
+                        self.img_array[y,x] = 0
+                else:
+                    for y in range(-10,-2):
+                        self.img_array[y,x] = 0
+
+        self.setImage(self.img_array.T, autoLevels=False, opacity = 1.0, autoDownsample=True)
+
+    @QtCore.pyqtSlot()
+    def autolevel(self):
+        #tmp_array = np.copy(self.img_array[self.img_array>0])
+        #tmp_array = tmp_array[tmp_array<250]
+        #tmp_array = tmp_array[:]
+
+        #minminlev = np.percentile(tmp_array, 1)
+        #self.minlev = np.percentile(tmp_array, 20)
+        #self.maxlev = np.percentile(tmp_array, 99.3)
+        #print( self.minlev, self.maxlev )
+        [ self.minlevel, self.maxlevel ] = np.percentile( self.img_array[self.img_array<0],[2,98])
+        self.setLevels([self.minlev, self.maxlev])
+
+        return self.minlev, self.maxlev
+        
+    @QtCore.pyqtSlot(float, float)
+    def newlevel(self, low, high):
+        self.setLevels([low, high])
+
+        return low, high
+        
 class ApplicationDisplay(QtWidgets.QMainWindow):
     # Display class
     #define a custom signal
@@ -1228,6 +1494,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
     soapy_remote_pan_signal = QtCore.pyqtSignal(dict)
     soapy_pan_signal = QtCore.pyqtSignal(dict)
     rtl_pan_signal = QtCore.pyqtSignal(int)
+    fft_change_signal = QtCore.pyqtSignal() # change in one of the FFT size parameters
 
     refresh = 50 # default refresh timer in msec
 
@@ -1244,8 +1511,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         super(ApplicationDisplay, self).__init__()
         
         self.N_WIN = 1024  # How many pixels to show from the FFT (around the center)
-        self.N_AVG = AppState.panadapter.N_AVG
-        self.fft_ratio = 2.
+        self.N_AVG = AppState.fft_avg
 
         self.init_ui()
         self.StatusBarText.setText(f'Panadapter: <B>{self.panadapter.name}</B> Radio: <B>{self.radio_class.make} {self.radio_class.model}<\B>')
@@ -1253,10 +1519,11 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
 
         pg.setConfigOptions(antialias=False)
 
-        self.scroll = -1
+        # Modeless windows
+        self.ffttaper = FFTTaperingMenu()
+        self.fftsize = FFTSizeMenu()
         
-        self.fftmenu = FFTMenu()
-        self.init_image()
+        #self.init_image()
         self.makeMenu()
 
         self.block_read_signal.connect(self.update)
@@ -1265,11 +1532,13 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         self.soapy_remote_pan_signal.connect(self.setSoapyRemote)
         self.soapy_pan_signal.connect(self.setSoapy)
         self.rtl_pan_signal.connect(self.setRtlsdr)
+        self.fft_change_signal.connect(self.fft_change)
 
         if AppState.discover:
             AppState.discover.SoapyRegister(self.soapy_list_signal)
 
         # Show window
+        self.resize(QtWidgets.QApplication.desktop().availableGeometry().width(),500) 
         self.show()
         
         if AppState.panadapter.Mode == 'Block':
@@ -1280,14 +1549,20 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
             self.timer.start(self.refresh)
         else:
             # Stream
-            AppState.panadapter.Stream( self.stream_read_signal, self.N_AVG*FFT_SIZE )
+            AppState.panadapter.Stream( self.stream_read_signal, AppState.fft_avg*AppState.fft_size )
                 
+    def fft_change( self ):
+        if AppState.panadapter.Mode == 'Stream':
+            # Stream
+            AppState.panadapter.Stream( self.stream_read_signal, AppState.fft_avg*AppState.fft_size )
+        self.N_WIN = int(AppState.fft_size / AppState.fft_ratio)
+
     def read(self):
         global AppState
         # Block mode only
         if TransmissionMode.changed():
             self.changef(TransmissionMode.mode().freq(self.radio_class))
-        self.block_read_signal.emit(AppState.panadapter.Read(self.N_AVG*FFT_SIZE))
+        self.block_read_signal.emit(AppState.panadapter.Read(AppState.fft_avg*AppState.fft_size))
             
     def read_callback(self,chunk):
         # Stream mode only
@@ -1310,52 +1585,11 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         self.qApp.quit()
 
     def makeWaterfall( self, panel ):
-        global AppState
+        self.waterfall = Waterfall()
         
-        self.waterfall = pg.ImageItem()
         panel.addItem(self.waterfall)
-        c=QtGui.QCursor()
-
         panel.hideAxis("left")
         #self.plotwidget1.hideAxis("bottom")
-
-        # RED-GREEN Colormap
-        pos = np.array([0., 0.5, 1.])
-        color = np.array([[0,0,0,255], [0,255,0,255], [255,0,0,255]], dtype=np.ubyte)
-
-        # MATRIX Colormap
-        pos = np.array([0., 1.])
-        color = np.array([[0,0,0,255], [0,255,0,255]], dtype=np.ubyte)
-
-        # BLUE-YELLOW-RED Colormap
-        pos = np.array([0.,                 0.4,              1.])
-        color = np.array([[0,0,90,255], [200,2020,0,255], [255,0,0,255]], dtype=np.ubyte)
-
-        cmap = pg.ColorMap(pos, color)
-        pg.colormap
-        lut = cmap.getLookupTable(0.0, 1.0, 256)
-
-        self.minlev = 220
-        self.maxlev = 140
-
-        # set colormap
-        self.waterfall.setLookupTable(lut)
-        self.waterfall.setLevels([self.minlev, self.maxlev])
-
-        # setup the correct scaling for x-axis
-        bw_hz = AppState.panadapter.SampleRate/float(FFT_SIZE) * float(self.N_WIN)/1.e6/self.fft_ratio
-        self.waterfall.scale(bw_hz,1)
-#        self.setLabel('bottom', 'Frequency', units='kHz')
-        
-#        self.text_leftlim = pg.TextItem("-%.1f kHz"%(bw_hz*self.N_WIN/2.))
-#        self.text_leftlim.setParentItem(self.waterfall)
-#        self.plotwidget1.addItem(self.text_leftlim)
-#        self.text_leftlim.setPos(0, 0)
-
-#        self.text_rightlim = pg.TextItem("+%.1f kHz"%(bw_hz*self.N_WIN/2.))
-#        self.text_rightlim.setParentItem(self.waterfall)
-#        self.plotwidget1.addItem(self.text_rightlim)
-#        self.text_rightlim.setPos(bw_hz*(self.N_WIN-64), 0)
 
     def changeRadio( self, radio_class ):
         global AppState
@@ -1397,9 +1631,24 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         Panels.addMenus( viewmenu, self )
 
         spectrummenu = menu.addMenu('&Spectrum')
-        fftwindow = QtWidgets.QAction('FFT &Window',self)
-        spectrummenu.addAction(fftwindow)
-        fftwindow.triggered.connect(lambda state, s=self: self.fftmenu.Menu_open(s))
+
+        a = QtWidgets.QAction('FFT &Taper',self)
+        spectrummenu.addAction(a)
+        a.triggered.connect(lambda state, s=self: self.ffttaper.Menu_open(s))
+
+        a = QtWidgets.QAction('FFT &Size',self)
+        spectrummenu.addAction(a)
+        a.triggered.connect(lambda state, s=self: self.fftsize.Menu_open(s))
+
+        a = QtWidgets.QAction('&Autolevel',self)
+        spectrummenu.addAction(a)
+        a.triggered.connect(self.on_autolevel_clicked)
+        
+        m = spectrummenu.addMenu('&Colors')
+        for c in Waterfall.Colors:
+            a = QtWidgets.QAction('&'+c,self)
+            a.triggered.connect(lambda state, c=c:self.waterfall.lookuptable(c))
+            m.addAction(a)
 
     def remakePanMenu( self ):
         self.panmenu.clear()
@@ -1565,16 +1814,8 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         #panel.showGrid(x=True, y=True)
 
         panel.hideAxis("left")
-        panel.hideAxis("bottom")
-
-    def init_image(self):
-        self.img_array = 250*np.ones((self.N_WIN//4, self.N_WIN))
-        # Plot the grid
-        for x in [0, self.N_WIN//2, self.N_WIN-1]:
-            if x==0 or x==self.N_WIN-1:
-                self.img_array[:,x] = 0
-            else:
-                self.img_array[:,x] = 0
+        panel.setLabel("bottom",None,'Hz')
+        #panel.hideAxis("bottom")
 
     def init_ui(self):
         self.win = QtWidgets.QWidget()
@@ -1587,15 +1828,13 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         vbox.addWidget(self.split)
 
         Panels.clear()
-        self.w_pan = Panels( "Waterfall", self.makeWaterfall, self.split )
         self.s_pan = Panels( "Spectrogram", self.makeSpectrum, self.split )
+        self.w_pan = Panels( "Waterfall", self.makeWaterfall, self.split )
 
         hbox = QtWidgets.QHBoxLayout()
 
         self.zoominbutton = QtWidgets.QPushButton("ZOOM IN")
         self.zoomoutbutton = QtWidgets.QPushButton("ZOOM OUT")
-        self.avg_increase_button = QtWidgets.QPushButton("AVG +")
-        self.avg_decrease_button = QtWidgets.QPushButton("AVG -")
         self.modechange = QtWidgets.QPushButton(TransmissionMode.mode().__name__)
         self.invertscroll = QtWidgets.QPushButton("Scroll")
         self.autolevel = QtWidgets.QPushButton("Auto Levels")
@@ -1607,8 +1846,6 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         hbox.addStretch()
 
         hbox.addWidget(self.autolevel)
-        hbox.addWidget(self.avg_increase_button)
-        hbox.addWidget(self.avg_decrease_button)
 
         vbox.addLayout(hbox)
         self.win.setLayout(vbox)
@@ -1626,55 +1863,33 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         self.zoomoutbutton.clicked.connect(self.on_zoomoutbutton_clicked)
         self.modechange.clicked.connect(self.on_modechange_clicked)
         self.invertscroll.clicked.connect(self.on_invertscroll_clicked)
-        self.avg_increase_button.clicked.connect(self.on_avg_increase_clicked)
-        self.avg_decrease_button.clicked.connect(self.on_avg_decrease_clicked)
-        self.autolevel.clicked.connect(self.on_autolevel_clicked)
-
-    def on_avg_increase_clicked(self):
-        if self.N_AVG<512:
-            self.N_AVG *= 2
-
-    def on_avg_decrease_clicked(self):
-        if self.N_AVG>1:
-            self.N_AVG /= 2
-
 
     def on_modechange_clicked(self):
         TransmissionMode.next()
         self.modechange.setText(TransmissionMode.mode().__name__)
 
     def on_autolevel_clicked(self):
-        tmp_array = np.copy(self.img_array[self.img_array>0])
-        tmp_array = tmp_array[tmp_array<250]
-        tmp_array = tmp_array[:]
-        #print( tmp_array.shape )
-
-        self.minminlev = np.percentile(tmp_array, 99)
-        self.minlev = np.percentile(tmp_array, 80)
-        self.maxlev = np.percentile(tmp_array, 0.3)
-        #print( self.minlev, self.maxlev )
-        self.waterfall.setLevels([self.minlev, self.maxlev])
-
-        self.s_pan.plot.setYRange(-self.minminlev, -self.maxlev, padding=0.3)
+        minlev, maxlev = self.waterfall.autolevel()
+        self.s_pan.plot.setYRange(minlev, maxlev, padding=0.3)
 
     def on_invertscroll_clicked(self):
-        self.scroll *= -1
-        self.init_image()
+        global AppState
+        AppState.scroll *= -1
+        self.waterfall.init_image()
 
     def on_zoominbutton_clicked(self):
-        if self.fft_ratio<512:
-            self.fft_ratio *= 2
-        #self.waterfall.scale(0.5,1)
+        if AppState.fft_ratio<512:
+            AppState.fft_ratio *= 2
     
     def on_zoomoutbutton_clicked(self):
-        if self.fft_ratio>1:
-            self.fft_ratio /= 2
-        #self.waterfall.scale(2.0,1)
+        global AppState
+        if AppState.fft_ratio>1:
+            AppState.fft_ratio /= 2
  
     def zoomfft(self, x, ratio = 1):
         global AppState
         f_demod = 1.
-        t_total = (1/AppState.panadapter.SampleRate) * FFT_SIZE * self.N_AVG
+        t_total = (1/AppState.panadapter.SampleRate) * AppState.fft_size * AppState.fft_avg
         t = np.arange(0, t_total, 1 / AppState.panadapter.SampleRate)
         lo = 2**.5 * np.exp(-2j*np.pi*f_demod * t) # local oscillator
         x_mix = x*lo
@@ -1688,50 +1903,32 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
     def update(self, chunk):
         # update the displays with the new data (chunk)
         global AppState
-        bw_hz = AppState.panadapter.SampleRate/float(FFT_SIZE) * float(self.N_WIN)
-        self.win.setWindowTitle('PEPYSCOPE - IS0KYB - N_FFT: %d, BW: %.1f kHz' % (FFT_SIZE, bw_hz/1000./self.fft_ratio))
+        bw_hz = AppState.panadapter.SampleRate * self.N_WIN / AppState.fft_size
+        self.win.setWindowTitle('PEPYSCOPE - IS0KYB - N_FFT: %d, BW: %.1f kHz' % (AppState.fft_size, bw_hz/1000./AppState.fft_ratio))
 
-        if self.fft_ratio>1:
-            chunk = self.zoomfft(chunk, self.fft_ratio)
+        if AppState.fft_ratio>1:
+            chunk = self.zoomfft(chunk, AppState.fft_ratio)
 
-        sample_freq, spec = scipy.signal.welch(chunk, AppState.panadapter.SampleRate, window=AppState.fft_window, nperseg=FFT_SIZE,  nfft=FFT_SIZE)
-        spec = np.roll(spec, FFT_SIZE//2, 0)[FFT_SIZE//2-self.N_WIN//2:FFT_SIZE//2+self.N_WIN//2]
-        
+        sample_freq, spec = scipy.signal.welch(chunk, AppState.panadapter.SampleRate, window=AppState.fft_tapering, nperseg=AppState.fft_size,  nfft=AppState.fft_size)
+        # sample freq not used
+#        spec = np.roll(spec, AppState.fft_size//2, 0)[FFT_SIZE//2-self.N_WIN//2:AppState.fft_size//2+self.N_WIN//2]
+        spec = np.fft.fftshift(spec)[AppState.fft_size//2-self.N_WIN//2:AppState.fft_size//2+self.N_WIN//2]
+
         # get magnitude 
         psd = abs(spec)
         # convert to dB scale
-        psd = -20 * np.log10(psd)
+        psd = 20 * np.log10(psd)
 
         # Plot the grid
-        for x in [0, self.N_WIN//2, self.N_WIN-1]:
-            #pass
-            psd[x] = 0            
-
-        # roll down one and replace leading edge with new data
-        self.img_array[-1:] = psd
-        self.img_array = np.roll(self.img_array, -1*self.scroll, 0)
-
-        for i, x in enumerate(range(0, self.N_WIN-1, ((self.N_WIN)//10))):
-            if i!=5 and i!=10:
-                if self.scroll>0:
-                    for y in range(5,15):
-                        #pass
-                        self.img_array[y,x] = 0
-                elif self.scroll<0:
-                    for y in range(-10,-2):
-                        #pass
-                        self.img_array[y,x] = 0
-
-        #self.spectrum_plot.plot()
-
-        self.waterfall.setImage(self.img_array.T, autoLevels=False, opacity = 1.0, autoDownsample=True)
-
+        self.waterfall.image_update(psd)
 #        self.text_leftlim.setPos(0, 0)
 #        self.text_leftlim.setText(text="-%.1f kHz"%(bw_hz/2000./self.fft_ratio))
 #        #self.text_rightlim.setPos(bw_hz*1000, 0)
 #        self.text_rightlim.setText(text="+%.1f kHz"%(bw_hz/2000./self.fft_ratio))
 
-        self.spectrum_plot.setData(np.arange(0,psd.shape[0]), -psd, pen="g")
+#        self.spectrum_plot.setData(np.arange(0,psd.shape[0]), -psd, pen="g")
+        hz = AppState.panadapter.SampleRate/4
+        self.spectrum_plot.setData(np.linspace(-hz,hz,psd.shape[0]), psd, pen="g")
 
         #self.plotwidget2.plot(x=[0,0], y=[-240,0], pen=pg.mkPen('r', width=1))
         #self.plotwidget2.plot(x=[self.N_WIN/2, self.N_WIN//2], y=[-240,0], pen=pg.mkPen('r', width=1))
@@ -1749,7 +1946,7 @@ class Panels():
     List = []
     def __init__(self, name, func, split):
         self.name = name
-        self._plot = pg.PlotWidget()
+        self._plot = PltWidget() # for custom context window
         func(self._plot)
         split.addWidget(self._plot)
         self.visible = True
@@ -1850,9 +2047,6 @@ class Manual(QtWidgets.QDialog):
         table.setLayout(tbox)
 
         #Scroll Area Properties
-#        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
-#        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-#        scroll.setWidgetResizable(True)
         scroll.setFixedHeight(200)
         scroll.setWidget(table)
         
