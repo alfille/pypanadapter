@@ -124,6 +124,37 @@ class CustomRadio(Radio):
     def __init(self,IF):
         self.IF = IF
 
+class ModelessMenu():
+    # Controls a modeless menu -- create, destroy, positioning
+    def __init__( self, MenuControl ):
+        self.MenuControl = MenuControl # Class of dialog control
+        self.modeless = None
+        # subclasses must define MenuControl
+        
+    def __del__(self):
+        self.close_modeless()
+
+    def close_modeless( self ):
+        if self.modeless:
+            if self.modeless.isVisible():
+                self.modeless.close()
+            self.modeless = None
+
+    def Menu_open( self, parent ):
+        if self.modeless:
+            self.close_modeless()
+        else:
+            self.modeless = self.MenuControl(self,parent)
+            self.modeless.setModal(False)
+            try:
+                x_loc = type(self.modeless).default_x_loc
+            except NameError:
+                x_loc = 0
+            self.modeless.move(x_loc,parent.geometry().bottom())
+            self.modeless.show()
+            self.modeless.raise_()
+            self.modeless.activateWindow()
+
 # Subclass pyqtgraph context menus
 # Referehce: https://groups.google.com/forum/#!topic/pyqtgraph/3jWiatJPilc
 # by Morgan Cherioux
@@ -272,7 +303,106 @@ class PanBlockClass(PanClass):
     def __init(self):
         super().__init__()
         
-class RTLSDR(PanBlockClass):
+class RTLSDRControl(QtWidgets.QDialog):
+    default_x_loc = 0 # startup screen location
+
+    def __init__(self,caller,parent):
+        super().__init__(parent)
+        self.resize(400,400)
+        self.parent = parent
+        self.caller = caller
+        
+        global AppState
+        
+        form = QtWidgets.QFormLayout()
+        self.form = form
+        
+        m = QtWidgets.QDoubleSpinBox(self.parent,minimum=15e3,maximum=3e9,singleStep=50e3,decimals=0,suffix=' Hz',)
+        form.addRow( '&Center Frequency',m)
+        m.setValue( AppState.panadapter.driver.fc )
+        m.valueChanged.connect(lambda d: AppState.panadapter.driver.set_center_freq(d))
+        
+        m = QtWidgets.QDoubleSpinBox(self.parent,minimum=0,maximum=3e6,singleStep=50e3,decimals=0,suffix=' Hz',)
+        form.addRow( '&Sample Rate',m)
+        m.setValue( AppState.panadapter.driver.sample_rate )
+        m.valueChanged.connect(lambda d: AppState.panadapter.driver.set_sample_rate(d))
+        
+        m = QtWidgets.QDoubleSpinBox(self.parent,minimum=0,maximum=3.2e6,singleStep=50e3,decimals=0,suffix=' Hz',)
+        form.addRow( '&Bandwidth',m)
+        m.setValue( AppState.panadapter.driver.bandwidth )
+        m.valueChanged.connect(lambda d: AppState.panadapter.driver.set_bandwidth(d))
+        
+        m = QtWidgets.QCheckBox('&Automatic Gain Control (agc)',parent)
+        AppState.panadapter.driver.set_agc_mode(False) # default off
+        m.setCheckState(QtCore.Qt.Unchecked)
+        m.stateChanged.connect(self.AGCtoggle)
+        form.addRow(m)
+        
+        m = QtWidgets.QComboBox(self.parent)
+        self.wgain = m
+        form.addRow( '&Gain (dB)',m)
+        gg = AppState.panadapter.driver.gain
+        ig = None
+        for i,g in enumerate(AppState.panadapter.driver.get_gains()):
+            if gg == g:
+                ig = i
+            m.addItem(str(g/10.))
+        if ig:
+            self.wgain.setCurrentIndex(ig)
+        else:
+            self.wgain.setCurrentIndex(0)
+        m.setEditable(False)
+        m.currentIndexChanged.connect(lambda i: AppState.panadapter.driver.set_gain(int(float(self.wgain.itemText(i))*10)))
+        
+        m = QtWidgets.QComboBox(self.parent)
+        form.addRow( '&Direct Sampling',m)
+        ds = { 
+            'No' : False,
+            'Yes - i channel':'i',
+            'Yes - q channel':'q'
+            }
+        for d in ds:
+            m.addItem(d)
+        m.setEditable(False)            
+        m.currentIndexChanged.connect(lambda i, m=m, ds=ds: AppState.panadapter.driver.set_direct_sampling(ds[m.itemText(i)]))
+        if AppState.panadapter.driver.fc < 30e6:
+            m.setCurrentIndex(m.findText('Yes - i channel'))
+        else:
+            m.setCurrentIndex(m.findText('No'))
+        
+        m = QtWidgets.QDoubleSpinBox(self.parent,minimum=0,maximum=1000,singleStep=1,decimals=0,suffix=' Hz',)
+        form.addRow( '&Frequency correction',m)
+        m.setValue( AppState.panadapter.driver.freq_correction )
+        m.valueChanged.connect(lambda d: AppState.panadapter.driver.set_freq_correction(d))
+        
+        tl = { 0:'Unknown',1:'E4000',2:'FC0012',3:'FC0013',4:'FC2580',5:'R820T',6:'R828D' }
+        n = AppState.panadapter.driver.get_tuner_type()
+        if n in tl:
+            m = QtWidgets.QLabel(tl[n],parent)
+        else:
+            m = QtWidgets.QLabel('Tuner type '+str(n),parent)
+        form.addRow( 'Tuner chip',m)
+        
+        self.setLayout(form)
+        
+    def AGCtoggle( self, s ):
+        global AppState
+        if s == QtCore.Qt.Checked:
+            AppState.panadapter.driver.set_manual_gain_enabled(False)
+            self.wgain.hide()
+            self.form.labelForField(self.wgain).hide()
+        else:
+            AppState.panadapter.driver.set_manual_gain_enabled(True)
+            self.wgain.show()
+            self.form.labelForField(self.wgain).show()
+            
+    def closeEvent( self, event ):
+        # Window closed directly
+        # Make sure WaveformPan knows about our closing
+        self.caller.modeless = None
+        event.accept()
+        
+class RTLSDR(PanBlockClass,ModelessMenu):
     SampleRate = 2.56E6  # Sampling Frequency of the RTLSDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
     _name = "RTLSDR"
     def __init__(self,serial=None,index=None,host=None,port=12345):
@@ -303,6 +433,9 @@ class RTLSDR(PanBlockClass):
             self.driver = None
             return
         self.driver.sample_rate = self.SampleRate
+
+        # Circumvent python heirachy madness
+        ModelessMenu.__init__( self, RTLSDRControl )
         
     def __del__(self):
         if self.driver:
@@ -326,6 +459,14 @@ class RTLSDR(PanBlockClass):
             self.driver.close()
         self.driver = None
 
+    def Menu( self, menu, parent ):
+        this_menu = super().Menu(menu, parent, True )
+        
+        this_menu.triggered.connect(lambda state, p=parent: self.Menu_open(p) )
+        
+#        this_menu.addAction(waveform)
+        return this_menu
+        
 class SoapyPan(PanBlockClass):
 
     SampleRate = 2.56E6  # Sampling Frequency of the RTLSDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
@@ -928,37 +1069,6 @@ def WaveformList():
     if not Flag_random:
         modules.remove('Random')
     return modules
-        
-class ModelessMenu():
-    # Controls a modeless menu -- create, destroy, positioning
-    def __init__( self, MenuControl ):
-        self.MenuControl = MenuControl # Class of dialog control
-        self.modeless = None
-        # subclasses must define MenuControl
-        
-    def __del__(self):
-        self.close_modeless()
-
-    def close_modeless( self ):
-        if self.modeless:
-            if self.modeless.isVisible():
-                self.modeless.close()
-            self.modeless = None
-                
-    def Menu_open( self, parent ):
-        if self.modeless:
-            self.close_modeless()
-        else:
-            self.modeless = self.MenuControl(self,parent)
-            self.modeless.setModal(False)
-            try:
-                x_loc = type(self.modeless).default_x_loc
-            except NameError:
-                x_loc = 0
-            self.modeless.move(x_loc,parent.geometry().bottom())
-            self.modeless.show()
-            self.modeless.raise_()
-            self.modeless.activateWindow()
 
 class WaveformPan(PanBlockClass,ModelessMenu):
     SampleRate = 2.56E6 
