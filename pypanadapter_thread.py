@@ -287,8 +287,8 @@ class PanStreamClass(PanClass):
     def stream_close( self ):
         print("Implementation Error: stream_close routine not defined for Panadapter ",self.name)
 
-    def Stream( self, update_signal , chunk_size ) :
-        self.update_signal = update_signal
+    def Stream( self, callback , chunk_size ) :
+        self.callback = callback
         self.chunk_size = chunk_size
 
         if self.stream:
@@ -402,93 +402,6 @@ class RTLSDRControl(QtWidgets.QDialog):
         # Make sure WaveformPan knows about our closing
         self.caller.modeless = None
         event.accept()
-        
-class RTLSDRstream(PanStreamClass,ModelessMenu):
-    SampleRate = 2.56E6  # Sampling Frequency of the RTLSDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
-    _name = "RTLSDR"
-    def __init__(self,serial=None,index=None,host=None,port=12345):
-        self.driver = None
-        PanStreamClass.__init__(self)
-        if not Flag_rtlsdr:
-            return
-        self.serial = serial
-        self.index = index
-        self.host = host
-        self.port = port
-        self.SampleRate = type(self).SampleRate
-
-        try:
-            if self.serial:
-                self.driver = rtlsdr.RtlSdr(serial_number = self.serial)
-                self._name = f'RTLSDR serial {serial}'
-            elif self.index:
-                self.driver = rtlsdr.RtlSdr(self.index)
-                self._name = f'RTLSDR index {index}'
-            elif self.host:
-                self.driver = rtlsdr.RtlSdrTcpClient( hostname=self.host, port=self.port ) 
-                self._name = f'RTLSDR @{host}:{port}'
-            else:
-                self.driver = rtlsdr.RtlSdr()
-                self._name = 'RTLSDR'
-        except:
-            print("RTLSDR not found")
-            self.driver = None
-            return
-        self.driver.sample_rate = self.SampleRate
-
-        # Circumvent python heirachy madness
-        ModelessMenu.__init__( self, RTLSDRControl )
-        
-    def stream_open( self ):
-        global AppState
-        if not self.driver:
-            return None
-        try:
-            print("Stream0 ",type(self).__name__)
-            self.driver.read_samples_async( self.read_callback, self.chunk_size, self )
-            print("Stream 1",type(self).__name__)
-            return True
-        except:
-            return None
-
-    def stream_close( self ):
-        if self.stream:
-            self.driver.cancel_read_async()
-            self.stream = None
-
-    def read_callback( self, in_data, context=None ):
-        self.update_signal.emit( np.flip( in_data ) ) 
-
-    def __del__(self):
-        if self.driver:
-            self.driver.close()
-        
-    def SetFrequency(self, IF ):
-        print(self.Mode)
-        stream = self.stream
-        self.stream_close()
-        if IF < 30.E6 :
-            #direct sampling needed (ADC Q vs 1=ADC I)
-            self.driver.set_direct_sampling(2)
-        else:
-            self.driver.set_direct_sampling(0)
-            
-        self.driver.center_freq = IF
-        if stream:
-            self.stream = self.stream_open()
-        
-    def Close(self):
-        if self.driver:
-            self.driver.close()
-        self.driver = None
-
-    def Menu( self, menu, parent ):
-        this_menu = super().Menu(menu, parent, True )
-        
-        this_menu.triggered.connect(lambda state, p=parent: self.Menu_open(p) )
-        
-#        this_menu.addAction(waveform)
-        return this_menu
         
 class RTLSDR(PanBlockClass,ModelessMenu):
     SampleRate = 2.56E6  # Sampling Frequency of the RTLSDR card (in Hz) # DON'T GO TOO LOW, QUALITY ISSUES ARISE
@@ -710,7 +623,7 @@ class AudioPan(PanStreamClass):
         self.center_freq = IF
         
     def audio_callback( self, in_data, frame_count, time_info, status_flags ):
-        self.update_signal.emit( np.frombuffer( in_data, 'float32' ) ) 
+        self.callback( np.frombuffer( in_data, 'float32' ) ) 
         return (None, pyaudio.paContinue)
 
     def Close(self):
@@ -1479,8 +1392,59 @@ class LSB(TransmissionMode):
     @classmethod
     def freq(cls,radio_class):
         return radio_class.IF+3000
+
+# Mutexes
+PSD_lock = QtCore.QMutex() # For generating the power spectrum
+PSD_ready = QtCore.QSemaphore(1)
+Plot_lock = QtCore.QMutex() # For using the power spectrum
+
+class Data():
+    # holds the data from the device in buffer that rolls off the end
+    def __init__(self,chunk_size=2048*128):
+        self.lock = QtCore.QMutex() # For adding or pulling data from panadapter
+        self.lock.unlock()
+        self.chunk_size = chunk_size
+        self.full = QtCore.QSemaphore(0)
+        self.maxsize = self.chunk_size * 32
         
- 
+    def new_real( self ):
+        self.lock.lock()
+        self.data = np.zeros(self.maxsize)
+        self.real = True
+        self.new_common()
+    
+    def new_complex( self ):
+        self.lock.lock()
+        self.data = np.zeros(self.maxsize)*(1+1j)
+        self.real = False
+        self.new_common()
+    
+    def new_common( self ):
+        self.size = 0
+        self.full.tryAcquire(self.full.available()) # No data left
+        self.lock.unlock()
+        return self
+    
+    def add( self, chunk ):
+        size = len(chunk)
+        print("add",size)        
+        self.lock.lock()
+        np.roll(self.data,size)
+        self.data[0:size] = chunk
+        self.size += size
+        if self.size > self.maxsize:
+            self.size = self.maxsize
+        if self.full.available() == 0 :
+            self.full.release() # Show Data is available
+        self.lock.unlock()
+        
+    def get_data_start(self):
+        self.full.acquire()
+        self.lock.lock()
+
+    def get_data_end(self):
+        self.lock.unlock()
+
 class ProgramState:
     # holds program "state"
     def __init__( self, panadapter=None, radio_class=None ):
@@ -1571,7 +1535,6 @@ class ProgramState:
                 except:
                     pass
         return alist
-                    
 
 #global
 AppState = ProgramState()
@@ -1686,9 +1649,7 @@ class Waterfall(pg.ImageItem):
         
 class ApplicationDisplay(QtWidgets.QMainWindow):
     # Display class
-    #define a custom signal
-    block_read_signal = QtCore.pyqtSignal(np.ndarray)
-    stream_read_signal = QtCore.pyqtSignal(np.ndarray)
+    # define a custom signal
     soapy_list_signal = QtCore.pyqtSignal()
     soapy_remote_pan_signal = QtCore.pyqtSignal(dict)
     soapy_pan_signal = QtCore.pyqtSignal(dict)
@@ -1724,9 +1685,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         
         #self.init_image()
         self.makeMenu()
-
-        self.block_read_signal.connect(self.update)
-        self.stream_read_signal.connect(self.read_callback)
+        
         self.soapy_list_signal.connect(self.remakePanMenu)
         self.soapy_remote_pan_signal.connect(self.setSoapyRemote)
         self.soapy_pan_signal.connect(self.setSoapy)
@@ -1740,35 +1699,25 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         self.resize(QtWidgets.QApplication.desktop().availableGeometry().width(),500) 
         self.show()
         
-        if AppState.panadapter.Mode == 'Block':
-            # Start timer for data collection
-            self.timer = QtCore.QTimer() #default
-            self.refresh = type(self).refresh
-            self.timer.timeout.connect(self.read)
-            self.timer.start(self.refresh)
-        else:
-            # Stream
-            AppState.panadapter.Stream( self.stream_read_signal, AppState.fft_avg*AppState.fft_size )
+        # Data repository
+        self.dataclass = Data()
+        self.dataclass.new_complex()
+
+        # Start reader in a separate thread
+        self.data_reader = DataReader( self, self.dataclass )
+        QtCore.QThreadPool.globalInstance().start(self.data_reader)
                 
+        # Start timer for data collection
+        timer = QtCore.QTimer() #default
+        refresh = type(self).refresh
+        timer.timeout.connect(self.update)
+        timer.start(refresh)
+        
     def fft_change( self ):
         if AppState.panadapter.Mode == 'Stream':
             # Stream
             AppState.panadapter.Stream( self.stream_read_signal, AppState.fft_avg*AppState.fft_size )
         self.N_WIN = int(AppState.fft_size / AppState.fft_ratio)
-
-    def read(self):
-        global AppState
-        # Block mode only
-        if TransmissionMode.changed():
-            self.changef(TransmissionMode.mode().freq(self.radio_class))
-        self.block_read_signal.emit(AppState.panadapter.Read(AppState.fft_avg*AppState.fft_size))
-            
-    def read_callback(self,chunk):
-        # Stream mode only
-        if TransmissionMode.changed():
-            self.changef(TransmissionMode.mode().freq(self.radio_class))
-        self.update( chunk )
-            
 
     def changef(self, F_SDR):
         global AppState
@@ -1778,11 +1727,6 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         global AppState
         #AppState.panadapter.Close()
         
-    def Loop(self, y_n ):
-        global AppState
-        AppState.Loop=y_n
-        self.qApp.quit()
-
     def makeWaterfall( self, panel ):
         self.waterfall = Waterfall()
         
@@ -2085,30 +2029,35 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         if AppState.fft_ratio>1:
             AppState.fft_ratio /= 2
  
-    def zoomfft(self, x, ratio = 1):
+    def zoomfft(self, ratio = 1):
         global AppState
         f_demod = 1.
         t_total = (1/AppState.panadapter.SampleRate) * AppState.fft_size * AppState.fft_avg
         t = np.arange(0, t_total, 1 / AppState.panadapter.SampleRate)
         lo = 2**.5 * np.exp(-2j*np.pi*f_demod * t) # local oscillator
-        x_mix = x*lo
+        x_mix = self.dataclass.data*lo
         
         power2 = int(np.log2(ratio))
         for mult in range(power2):
             x_mix = scipy.signal.decimate(x_mix, 2) # mix and decimate
 
-        return x_mix 
+        return scipy.signal.welch(x_mix, AppState.panadapter.SampleRate, window=AppState.fft_tapering, nperseg=AppState.fft_size,  nfft=AppState.fft_size) 
 
-    def update(self, chunk):
-        # update the displays with the new data (chunk)
+    def update(self):
         global AppState
+        print("Update")
+        self.dataclass.get_data_start()
+        print("Data")
+        
+        # update the displays with the new data (chunk)
         bw_hz = AppState.panadapter.SampleRate * self.N_WIN / AppState.fft_size
         self.win.setWindowTitle('PEPYSCOPE - IS0KYB - N_FFT: %d, BW: %.1f kHz' % (AppState.fft_size, bw_hz/1000./AppState.fft_ratio))
 
         if AppState.fft_ratio>1:
-            chunk = self.zoomfft(chunk, AppState.fft_ratio)
+            sample_freq, spec = self.zoomfft(AppState.fft_ratio)
+        else:
+            sample_freq, spec = scipy.signal.welch(self.dataclass.data, AppState.panadapter.SampleRate, window=AppState.fft_tapering, nperseg=AppState.fft_size,  nfft=AppState.fft_size)
 
-        sample_freq, spec = scipy.signal.welch(chunk, AppState.panadapter.SampleRate, window=AppState.fft_tapering, nperseg=AppState.fft_size,  nfft=AppState.fft_size)
         # sample freq not used
 #        spec = np.roll(spec, AppState.fft_size//2, 0)[FFT_SIZE//2-self.N_WIN//2:AppState.fft_size//2+self.N_WIN//2]
         spec = np.fft.fftshift(spec)[AppState.fft_size//2-self.N_WIN//2:AppState.fft_size//2+self.N_WIN//2]
@@ -2132,11 +2081,41 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
         #self.plotwidget2.plot(x=[0,0], y=[-240,0], pen=pg.mkPen('r', width=1))
         #self.plotwidget2.plot(x=[self.N_WIN/2, self.N_WIN//2], y=[-240,0], pen=pg.mkPen('r', width=1))
         #self.plotwidget2.plot(x=[self.N_WIN-1, self.N_WIN-1], y=[-240,0], pen=pg.mkPen('r', width=1))
+        
+        self.dataclass.get_data_end()
 
     def Loop(self, y_n ):
         global AppState
         AppState.Loop=y_n
         QtWidgets.qApp.quit()
+        
+    def __del__(self):
+        # Kill the thread too
+        try:
+            self.data_reader.loop = False
+            print("Success")
+        except:
+            print("Problem")
+            pass
+        
+class DataReader(QtCore.QRunnable):
+    def __init__(self, caller, dataclass ):
+        super().__init__()
+        self.caller = caller
+        self.dataclass = dataclass
+        self.chunk_size = self.dataclass.chunk_size
+        self.loop = True # can change from affar to stop loop
+
+    def run(self):
+        global AppState
+        if AppState.panadapter.Mode == 'Block':
+            while self.loop:
+                self.dataclass.add(AppState.panadapter.Read(self.chunk_size))
+       
+        else:
+            # Stream
+            AppState.panadapter.Stream( self.dataclass.add, self.chunk_size )
+
 
 class Panels():
     # manage the displaypanels -- waterfall and spectrogram so far
@@ -2480,6 +2459,7 @@ def main(args):
                 AppState.discover = None
         display = ApplicationDisplay()
         app.exec_()
+        display.data_reader.loop = False
         display = None
         app = None
 
