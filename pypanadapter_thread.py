@@ -26,6 +26,9 @@ import scipy.special
 import numpy as np
 import pyqtgraph as pg
 
+# local module (also on github independently as https://github.com/alfille/NewtRap
+import newtrap
+
 try:
     import pyaudio
     Flag_audio = True
@@ -61,177 +64,9 @@ except:
     print("Could not find pyusb module\n\trun <pip3 pyusb>\n\tsee https://github.com/pyusb/pyusb")
     Flag_USB = False
     
-try:
-    import simple_pid
-    Flag_PID = True
-except:
-    print("Could not find simple_pid \n\t run <pip3 install simple_pid>\n \n\tsee https://simple-pid.readthedocs.io/en/latest/index.html")
-    Flag_PID = False
-    
 FFT_SIZE = 2048 # initial size
-FRAME_RATE = 8 # data refesh rate in Hz
-
-class NewtRap():
-    # Newton Raphson 's method for control
-    # Uses 2 points to find derivative, so needs 2 measurements
-    # Remembers internally which measurement
-    # Lots of care with all the special cases
-    def __init__(self, target=1, error = None, lo=None, hi=None, x0=None):
-        self._target = target
-        self.alpha = .3
-        self.oldy = None
-        
-        if error:
-            self._error = math.abs(error)
-        elif self._target == 0:
-            self._error = .01
-        else:
-            self._error = .01 * math.abs(self._target)
-
-        if lo and hi:
-            if lo > hi:
-                s = hi
-                hi = lo
-                lo = s
-            elif lo == hi:
-                hi = lo + 1 # arbitrary
-            
-            self.xpair = (lo,hi)
-            if x0:
-                if x0 > lo:
-                    self.xpair = ( lo, x0 )
-                elif x0 < hi:
-                    self.xpair= ( x0, hi )
-        elif lo: # no hi        
-            if x0 and x0 >= lo:
-                self.xpair = (x0, 1.1*x0)
-            else:
-                self.xpair = (lo, 1.1*lo)
-        elif hi: # no lo
-            if x0 and x0 <=hi:
-                self.xpair = (.9*x0, x0)
-            else:
-                self.xpair = (.9*hi, hi)
-        elif x0: # unbounded
-            self.xpair = (.9*x0, 1.1*x0)
-        else:
-            self.xpair = (.5, 1.5 )
-        
-        self._lo = lo
-        self._hi = hi
-        self.first = True # which part of the pair?
-        
-    def Next( self, value ):
-        y = value - self._target
-        if self.first:
-            self.ypair[0] = y
-            if math.abs(y) <= self._error:
-                # within tolerances, repeat
-                return self.xpair[0]
-            else:
-                self.first = False
-                return self.xpair[1]
-        else:
-            self.ypair[1] = y
-            if math.abs(y) <= self._error:
-                # within tolerances, repeat
-                return self.xpair[1]
-            else:
-                self.xpair = self.new_pair()
-                self.apply_limits()
-                self.first = True
-                return self.xpair[0]
-
-    def new_pair( self ):
-        # average and difference
-        x1 = .5 * ( self.xpair[0] + self.xpair[1] )
-        y1 = .5 * ( self.ypair[0] + self.ypair[1] )
-        dx = self.xpair[0] - self.xpair[1]
-        dy = self.ypair[0] - selfypair[1]
-        
-        if dx == 0:
-            return expand()
-        
-        # Worse
-        if self.oldy:
-            if self.oldy < y1:
-                return self.expand()
-
-        # "minimum"
-        if dy == 0 :
-            # contract a little and remeasure
-                return self.expand()
-
-        # method
-        x2 = x1 - y1 * dx / dy
-        
-        # New bracket
-        x2a = x2
-        x2b = .5 * ( x2 + x1 )
-        
-        self.oldy = y1
-        return ( x2a, x2b )
-
-    def expand( self ):
-        # called when calculation is unstable
-        # Jostle a bit and remeasure
-        return ( self.xpair[0]-1 , self.xpair[1]+1 )
-        
-    def apply_limits( self ):
-        if self._lo:
-            if self.xpair[0] < self._lo:
-                self._xpair[0] = self._lo
-            if self.xpair[1] < self._lo:
-                self._xpair[1] = self._lo
-            if self.xpair[0] == self.xpair[1]:
-                self.xpair[1] = self.xpair[0]+1
-        if self._hi:
-            if self.xpair[0] > self._hi:
-                self._xpair[0] = self._hi
-            if self.xpair[1] > self._hi:
-                self._xpair[1] = self._lo
-            if self.xpair[0] == self.xpair[1]:
-                self.xpair[1] = self.xpair[0]-1
-                    
-    @property
-    def target( self ):
-        return self._target
-        
-    @target.setter
-    def target( self, t ):
-        self._target = t
-        self.oldy = False
-        self.first = True
-
-    @property
-    def error( self ):
-        return self._error
-        
-    @error.setter
-    def error( self, e ):
-        self._error = e
-        self.oldy = False
-        self.first = True
-
-    @property
-    def lo( self ):
-        return self._lo
-        
-    @lo.setter
-    def lo( self, e ):
-        self._lo = e
-        self.oldy = False
-        self.first = True
-
-    @property
-    def hi( self ):
-        return self._lo
-        
-    @hi.setter
-    def hi( self, e ):
-        self._hi = e
-        self.oldy = False
-        self.first = True
+FRAME_RATE = 10 # data refesh rate in Hz
+FRAME_TIME = 1./FRAME_RATE
 
 class SubclassManager():
     # base class that gives subclass list and matching
@@ -1570,11 +1405,10 @@ class Data():
         self.chunk_size = chunk_size
         self.max_size = self.chunk_size * 16
         self.target_size = self.max_size * .9
-        if Flag_PID:
-            # PID controller for delay time given excess data read
-            # reverse mode (more delay decreases data)
-            self.pid = simple_pid.PID(-1, -.1, -.05, setpoint = 0 )
-            self.pid.output_limits = (0,.01) # max delay < refresh
+
+        # controller for delay time
+        self.delay_time = 0.
+        self.NR = newtrap.NewtRap( self.target_size, .01*FRAME_TIME, 0, FRAME_TIME, self.delay_time )
         
     def new_real( self ):
         self.lock.lock()
@@ -1602,9 +1436,6 @@ class Data():
         
         # add length to buffer (fold back on overflow)
         new_size = self.size + length
-        if not Flag_PID and new_size > self.target_size:
-            # dumb adjust delay
-            self.delay_time *= 1.1
         if new_size > self.max_size:
             # overwrite from start of buffer
             self.size = 0
@@ -1621,25 +1452,35 @@ class Data():
 
         self.lock.unlock()
 
-        if Flag_PID:
-            print("add PID ",self.delay_time, self.real_size)        
-            time.sleep( self.delay_time )
-        else:
-            print("add",self.delay_time, self.real_size)        
-            time.sleep(self.delay_time) # pauses the reader thread to slow down generation
+        # pause to not overfill the buffer
+        # abs added for safety when seatching gives a negative
+        time.sleep(abs(self.delay_time))
     
     def get_data_start(self):
         self.lock.lock()
 
     def get_data_end(self):
-        if Flag_PID:
-            self.delay_time = self.pid(self.total_size - self.target_size )
-        elif self.total_size < self.target_size:
-            self.delay_time /= 1.1
+        self.delay_time = self.NR.next(self.total_size)
         self.size = 0
         self.real_size = 0
         self.total_size = 0
         self.lock.unlock()
+        print(self.delay_time)
+        
+    @property
+    def target( self ):
+        return self.target_size
+        
+    @target.setter
+    def target( self, t ):
+        global AppState
+        if t >= AppState.fft_size and t <= self.max_size: 
+            self.target_size = t
+            self.NR.target = t
+            
+    @property
+    def maxsize( self ):
+        return self.max_size
 
 class PSD(QtCore.QRunnable):
     # Computes PSD
@@ -1650,14 +1491,18 @@ class PSD(QtCore.QRunnable):
         self.dataclass = dataclass
         self.lock = QtCore.QMutex() # For adding or pulling data from panadapter
         self.lock.unlock()
-        self.full = QtCore.QSemaphore(0)
-        self.loop = True # can change from affar to stop loop
+        self.loop = True # can change from afar to stop loop
+        
+        self.NR = newtrap.NewtRap( 0, .01 * FRAME_TIME, AppState.fft_size, self.dataclass.maxsize , self.dataclass.target ) 
     
     def run(self):
         while self.loop:
-            target = time.monotonic() + .09 # refresh 10/sec 
+            target = time.monotonic() + .95 * FRAME_TIME # refresh 10/sec 
             self.update()
             end = time.monotonic()
+            if abs(end-target) > .05 * FRAME_TIME:
+                self.dataclass.target = int(self.NR.next( target - end ))
+                print("Update",self.dataclass.target)
             if end < target:
                 # could take more
                 time.sleep(target-end)
@@ -1673,7 +1518,6 @@ class PSD(QtCore.QRunnable):
         chunk = self.dataclass.data[:size]
         
         self.dataclass.get_data_end()
-        print("Update",size)
         
         if size < AppState.fft_size:
             return
@@ -1915,7 +1759,7 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
     rtl_pan_signal = QtCore.pyqtSignal(int)
     fft_change_signal = QtCore.pyqtSignal() # change in one of the FFT size parameters
 
-    refresh = 50 # default refresh timer in msec
+    refresh = int(FRAME_TIME*1000) # default refresh timer in msec
 
     def __init__(self ):
         # Comes in with Panadapter set and radio_class set.
@@ -2295,7 +2139,6 @@ class ApplicationDisplay(QtWidgets.QMainWindow):
  
     def update(self):
         global AppState
-        print("Update main")
 
         self.psd.lock.lock()
         psd = self.psd.psd
